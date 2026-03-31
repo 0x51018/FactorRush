@@ -74,8 +74,13 @@ graph TD
 
 ```text
 /home/younhj1018/apps/factorrush/
-  app/                # Git checkout
+  live/               # GitHub Actions가 직접 갱신하는 clean checkout
 ```
+
+권장 이유:
+
+- `live` 경로는 배포 전용으로만 사용한다.
+- 수동 실험이나 임시 파일은 다른 디렉터리에서 하고, 자동 배포는 항상 이 clean checkout 하나만 갱신하는 편이 안전하다.
 
 ## 2. 최초 설정 파일 준비
 
@@ -136,6 +141,12 @@ docker compose --env-file deploy/home/.env -f deploy/home/docker-compose.yml log
 ## 4. 자동 배포 방향
 
 홈 서버 전환 후에는 GitHub Actions가 SSH로 홈 서버에 접속해 `scripts/deploy-home.sh`를 실행하도록 바꾸는 것이 가장 단순하다.
+
+주의:
+
+- `scripts/deploy-home.sh`는 `git pull`이 아니라 `origin/<branch>` 기준으로 로컬 브랜치를 다시 맞춘다.
+- 즉, 최초 clone이 어떤 브랜치에서 시작됐더라도 다음 배포부터는 지정 브랜치 상태로 정렬된다.
+- 이 방식은 배포 전용 checkout에서만 쓰는 것을 전제로 한다.
 
 중요:
 
