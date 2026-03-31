@@ -72,6 +72,9 @@ async function setRangeValue(locator: Locator, value: number) {
 async function switchToEnglish(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: /^EN$/ }).click();
+  await expect(page.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
 }
 
 test("landing keeps both forms inside a 720p viewport", async ({ page }) => {
@@ -151,6 +154,9 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await hostPage.getByRole("button", { name: "Close" }).click();
 
   await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
   await expect(guestPage.getByTestId("invite-name-input")).toBeVisible();
   await guestPage.getByTestId("invite-name-input").fill("GuestBeta");
   await guestPage.getByTestId("invite-join-button").click();
@@ -248,6 +254,9 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
 
   const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
   await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
   await guestPage.getByTestId("invite-name-input").fill("BellGuest");
   await guestPage.getByTestId("invite-join-button").click();
 

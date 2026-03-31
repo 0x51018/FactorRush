@@ -707,7 +707,11 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             <p className={styles.kicker}>{copy.mastheadKicker}</p>
             <div className={styles.wordmarkRow}>
               <h1 className={styles.wordmark}>FactorRush</h1>
-              <span className={styles.connectionBadge} data-live={isConnected}>
+              <span
+                className={styles.connectionBadge}
+                data-live={isConnected}
+                data-testid="connection-badge"
+              >
                 {isConnected ? copy.connectionLive : copy.connectionReconnecting}
               </span>
             </div>

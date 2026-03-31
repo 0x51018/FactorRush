@@ -56,7 +56,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           chmod 644 ~/.ssh/known_hosts
 
-      - name: Deploy on server
+      - name: Deploy on home server
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
@@ -76,4 +76,4 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -p "${DEPLOY_PORT:-22}" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "export APP_DIR=${escaped_path}; bash ${escaped_path}/scripts/deploy-production.sh"
+            "export APP_DIR=${escaped_path}; bash ${escaped_path}/scripts/deploy-home.sh"

@@ -1,0 +1,76 @@
+services:
+  web:
+    container_name: factorrush-web
+    build:
+      context: ../..
+      dockerfile: deploy/home/Dockerfile
+      target: web-runner
+      args:
+        NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
+    restart: unless-stopped
+    env_file:
+      - ./web.env
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - proxy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then((response)=>{if(!response.ok)process.exit(1);}).catch(()=>process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.factorrush.rule=Host(`${FACTORRUSH_HOST}`)
+      - traefik.http.routers.factorrush.entrypoints=websecure
+      - traefik.http.routers.factorrush.tls=true
+      - traefik.http.routers.factorrush.tls.certresolver=le
+      - traefik.http.routers.factorrush.priority=10
+      - traefik.http.services.factorrush.loadbalancer.server.port=3000
+
+  server:
+    container_name: factorrush-server
+    build:
+      context: ../..
+      dockerfile: deploy/home/Dockerfile
+      target: server-runner
+    restart: unless-stopped
+    env_file:
+      - ./server.env
+    networks:
+      - proxy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/health').then((response)=>{if(!response.ok)process.exit(1);}).catch(()=>process.exit(1))"
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.factorrush-socket.rule=Host(`${FACTORRUSH_HOST}`) && PathPrefix(`/socket.io`)
+      - traefik.http.routers.factorrush-socket.entrypoints=websecure
+      - traefik.http.routers.factorrush-socket.tls=true
+      - traefik.http.routers.factorrush-socket.tls.certresolver=le
+      - traefik.http.routers.factorrush-socket.priority=100
+      - traefik.http.services.factorrush-socket.loadbalancer.server.port=3001
+
+networks:
+  proxy:
+    external: true
+    name: proxy

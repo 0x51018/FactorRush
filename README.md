@@ -89,4 +89,5 @@ The smoke test checks the realtime room flow:
 
 - Codebase guide: `docs/architecture-ko.md`
 - Socket API spec: `docs/socket-api-ko.md`
-- Deployment guide: `docs/deployment-github-actions-ko.md`
+- Oracle/systemd deployment guide: `docs/deployment-github-actions-ko.md`
+- Home server Docker deployment guide: `docs/deployment-home-server-ko.md`
