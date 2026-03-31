@@ -23,11 +23,23 @@ git fetch origin "${DEPLOY_BRANCH}" --depth=1
 git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}"
 
 test -f "${COMPOSE_FILE}"
+if [[ ! -f "${COMPOSE_ENV_FILE}" ]]; then
+  cp deploy/home/.env.example "${COMPOSE_ENV_FILE}"
+fi
+
+if [[ ! -f "deploy/home/server.env" ]]; then
+  cp deploy/home/server.env.example deploy/home/server.env
+fi
+
+if [[ ! -f "deploy/home/web.env" ]]; then
+  cp deploy/home/web.env.example deploy/home/web.env
+fi
+
 test -f "${COMPOSE_ENV_FILE}"
 test -f "deploy/home/server.env"
 test -f "deploy/home/web.env"
 
-docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build
+docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build --wait --wait-timeout 90
 
 docker compose --env-file "${COMPOSE_ENV_FILE}" -f "${COMPOSE_FILE}" exec -T server \
   node -e "fetch('http://127.0.0.1:3001/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))"

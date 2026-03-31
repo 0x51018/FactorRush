@@ -144,8 +144,11 @@ docker compose --env-file deploy/home/.env -f deploy/home/docker-compose.yml log
 
 주의:
 
+- 현재 워크플로는 원격 호스트에서 먼저 `origin/main`을 checkout 한 뒤 `scripts/deploy-home.sh`를 실행한다.
+- 이 bootstrap 단계가 있어야, 배포 스크립트 자체가 바뀌는 커밋도 첫 실행부터 반영할 수 있다.
 - `scripts/deploy-home.sh`는 `git pull`이 아니라 `origin/<branch>` 기준으로 로컬 브랜치를 다시 맞춘다.
 - 즉, 최초 clone이 어떤 브랜치에서 시작됐더라도 다음 배포부터는 지정 브랜치 상태로 정렬된다.
+- 컨테이너 재기동 뒤에는 `docker compose up --wait`로 healthcheck가 완료될 때까지 기다린다.
 - 이 방식은 배포 전용 checkout에서만 쓰는 것을 전제로 한다.
 
 중요:

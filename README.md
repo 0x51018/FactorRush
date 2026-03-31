@@ -81,7 +81,8 @@ The smoke test checks the realtime room flow:
 - Room state is in-memory only, so rooms disappear when the server restarts.
 - Reconnect is supported in a rough way through local browser storage.
 - The gameplay rules are intentionally modular so scoring, round flow, and challenge generation can be refined later.
-- There is no Docker or container networking configured yet.
+- Local development still runs as separate Next.js and Socket.IO processes.
+- Production is currently served from the home server through Docker + Traefik.
 - By default, the frontend connects to the realtime server at `http://localhost:3001`.
 - You can override the frontend target with `NEXT_PUBLIC_SERVER_URL`.
 
@@ -91,3 +92,4 @@ The smoke test checks the realtime room flow:
 - Socket API spec: `docs/socket-api-ko.md`
 - Oracle/systemd deployment guide: `docs/deployment-github-actions-ko.md`
 - Home server Docker deployment guide: `docs/deployment-home-server-ko.md`
+- Final operations handoff: `docs/service-handoff-ko.md`
