@@ -1,0 +1,12 @@
+.git
+.github
+.codex-artifacts
+test-results
+node_modules
+**/node_modules
+apps/web/.next
+apps/server/dist
+packages/shared/dist
+docs
+deploy/nginx
+deploy/systemd
