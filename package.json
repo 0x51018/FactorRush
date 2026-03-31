@@ -1,0 +1,21 @@
+{
+  "name": "factorrush",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n shared,server,web -c cyan,green,magenta \"npm run dev --workspace @factorrush/shared\" \"npm run dev --workspace @factorrush/server\" \"npm run dev --workspace @factorrush/web\"",
+    "build": "npm run build --prefix packages/shared && npm run build --prefix apps/server && npm run build --prefix apps/web",
+    "check": "npm run build",
+    "smoke:dev": "node scripts/dev-smoke.mjs",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.2"
+  }
+}

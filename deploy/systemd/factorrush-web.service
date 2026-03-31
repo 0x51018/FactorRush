@@ -1,0 +1,19 @@
+[Unit]
+Description=FactorRush Next.js web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=factorrush
+Group=factorrush
+WorkingDirectory=/srv/factorrush/app
+EnvironmentFile=/etc/factorrush/web.env
+ExecStart=/usr/bin/npm run start --workspace @factorrush/web
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

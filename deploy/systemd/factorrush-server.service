@@ -1,0 +1,19 @@
+[Unit]
+Description=FactorRush realtime server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=factorrush
+Group=factorrush
+WorkingDirectory=/srv/factorrush/app
+EnvironmentFile=/etc/factorrush/server.env
+ExecStart=/usr/bin/npm run start --workspace @factorrush/server
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
