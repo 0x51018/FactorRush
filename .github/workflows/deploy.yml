@@ -21,10 +21,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
           cache: npm
@@ -61,14 +61,17 @@ jobs:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
           DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_REPO: ${{ github.server_url }}/${{ github.repository }}.git
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_HOST"
           test -n "$DEPLOY_PATH"
+          test -n "$DEPLOY_REPO"
           test -n "$DEPLOY_USER"
 
           escaped_path="$(printf '%q' "$DEPLOY_PATH")"
+          escaped_repo="$(printf '%q' "$DEPLOY_REPO")"
 
           ssh -i ~/.ssh/id_ed25519 \
             -o BatchMode=yes \
@@ -76,4 +79,13 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -p "${DEPLOY_PORT:-22}" \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "export APP_DIR=${escaped_path}; bash ${escaped_path}/scripts/deploy-home.sh"
+            "set -euo pipefail; \
+             if [ ! -d ${escaped_path}/.git ]; then \
+               mkdir -p \"\$(dirname ${escaped_path})\"; \
+               git clone --branch main ${escaped_repo} ${escaped_path}; \
+             fi; \
+             cd ${escaped_path}; \
+             git fetch origin main --depth=1; \
+             git checkout -B main origin/main; \
+             export APP_DIR=${escaped_path}; \
+             bash ${escaped_path}/scripts/deploy-home.sh"
