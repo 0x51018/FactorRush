@@ -30,6 +30,7 @@ interface CreateRoomRequest {
 interface JoinRoomResult {
   roomId: string;
   playerId: string;
+  role: "player" | "spectator";
 }
 ```
 
@@ -39,7 +40,7 @@ interface JoinRoomResult {
 
 ### `room:join`
 
-기존 방에 참가하거나, 저장된 `playerId`를 이용해 재접속을 시도합니다.
+기존 방에 참가하거나, 저장된 멤버 ID를 이용해 재접속을 시도합니다.
 
 요청:
 
@@ -47,6 +48,7 @@ interface JoinRoomResult {
 interface JoinRoomRequest {
   roomId: string;
   playerName: string;
+  reconnectMemberId?: string;
   reconnectPlayerId?: string;
 }
 ```
@@ -57,13 +59,42 @@ interface JoinRoomRequest {
 interface JoinRoomResult {
   roomId: string;
   playerId: string;
+  role: "player" | "spectator";
 }
 ```
 
 비고:
 
-- `reconnectPlayerId`가 유효하고 해당 플레이어가 오프라인 상태면 재접속으로 처리됩니다.
-- 아니면 새 플레이어로 입장합니다.
+- `reconnectMemberId` 또는 `reconnectPlayerId`가 유효하면 플레이어/관전자 세션 복구를 우선 시도합니다.
+- 로비 상태면 새 플레이어로 입장합니다.
+- 게임 진행 중이면 새 사용자는 관전자로 입장합니다.
+
+### `room:become-player`
+
+로비에 있는 관전자가 플레이어 좌석으로 합류합니다.
+
+요청:
+
+```ts
+interface RoomActionRequest {
+  roomId: string;
+}
+```
+
+성공 응답:
+
+```ts
+interface JoinRoomResult {
+  roomId: string;
+  playerId: string;
+  role: "player";
+}
+```
+
+비고:
+
+- 로비에서만 허용됩니다.
+- 플레이어 좌석이 가득 찼으면 실패합니다.
 
 ### `room:update-settings`
 
@@ -194,6 +225,7 @@ interface RoomSnapshot {
   phase: "lobby" | "round-active" | "round-ended" | "finished";
   settings: LobbySettings;
   players: PlayerSummary[];
+  spectators: SpectatorSummary[];
   round: RoundSnapshot | null;
   finalWinnerIds: string[];
   message: string;
@@ -222,6 +254,16 @@ interface PlayerSummary {
   isHost: boolean;
   connected: boolean;
   correctAnswers: number;
+}
+```
+
+### `SpectatorSummary`
+
+```ts
+interface SpectatorSummary {
+  id: string;
+  name: string;
+  connected: boolean;
 }
 ```
 
@@ -261,6 +303,7 @@ interface PlayerRoundStatus {
 - 서버가 상태의 진실 공급원(source of truth)이다.
 - 클라이언트는 가능한 한 서버 snapshot을 렌더링하는 역할에 집중한다.
 - 현재 연결 구조는 `Next.js(:3000) -> Socket 서버(:3001)`의 분리 프로세스 방식이다.
+- 진행 중 입장 사용자는 관전자로 분리해 공정성과 합류 경험을 함께 유지한다.
 
 ## 5. 향후 확장 시 추천
 

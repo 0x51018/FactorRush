@@ -1,7 +1,7 @@
 import { io } from "socket.io-client";
 
 const SERVER_URL = process.env.SMOKE_SERVER_URL ?? "http://127.0.0.1:3001";
-const TIMEOUT_MS = 10000;
+const TIMEOUT_MS = 35000;
 const PRIME_SHOUT = "야호 소수다";
 
 async function main() {
@@ -10,6 +10,8 @@ async function main() {
   results.push(await runScenario("factor"));
   results.push(await runScenario("binary"));
   results.push(await runGoldenBellScenario());
+  results.push(await runSuddenDeathScenario());
+  results.push(await runSpectatorScenario());
   results.push(await runPresenceScenario());
 
   console.log(
@@ -87,6 +89,92 @@ async function runPresenceScenario() {
   }
 }
 
+async function runSpectatorScenario() {
+  const host = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+  const guest = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+  const spectator = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+
+  const hostObserver = createRoomObserver(host);
+  const guestObserver = createRoomObserver(guest);
+  const spectatorObserver = createRoomObserver(spectator);
+
+  try {
+    await Promise.all([connect(host), connect(guest), connect(spectator)]);
+
+    const created = await emitAck(host, "room:create", {
+      playerName: "spec-Host",
+      settings: {
+        mode: "factor",
+        roundCount: 3,
+        roundTimeSec: 20,
+        binaryDecimalToBinaryChance: 50
+      }
+    });
+
+    await hostObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 1);
+
+    await emitAck(guest, "room:join", {
+      roomId: created.roomId,
+      playerName: "spec-Guest"
+    });
+
+    await guestObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 2);
+
+    await emitAck(guest, "room:set-ready", {
+      roomId: created.roomId,
+      isReady: true
+    });
+
+    await emitAck(host, "game:start", { roomId: created.roomId });
+    await hostObserver.waitFor((state) => state.phase === "round-active" && Boolean(state.round));
+
+    const joined = await emitAck(spectator, "room:join", {
+      roomId: created.roomId,
+      playerName: "spec-Watcher"
+    });
+
+    if (joined.role !== "spectator") {
+      throw new Error("진행 중 참가자는 관전자로 입장해야 합니다.");
+    }
+
+    const spectatingState = await hostObserver.waitFor(
+      (state) =>
+        state.phase === "round-active" &&
+        state.spectators.some((entry) => entry.name === "spec-Watcher")
+    );
+
+    await emitAck(host, "room:reset", { roomId: created.roomId });
+    await spectatorObserver.waitFor((state) => state.phase === "lobby");
+
+    const seated = await emitAck(spectator, "room:become-player", {
+      roomId: created.roomId
+    });
+
+    if (seated.role !== "player") {
+      throw new Error("관전자는 로비에서 플레이어 좌석으로 합류해야 합니다.");
+    }
+
+    const seatedState = await hostObserver.waitFor(
+      (state) =>
+        state.phase === "lobby" &&
+        state.players.some((entry) => entry.name === "spec-Watcher") &&
+        state.spectators.every((entry) => entry.name !== "spec-Watcher")
+    );
+
+    return {
+      mode: "spectator",
+      roomId: created.roomId,
+      joinRole: joined.role,
+      spectatorCountWhileLive: spectatingState.spectators.length,
+      playersAfterSeat: seatedState.players.length
+    };
+  } finally {
+    host.disconnect();
+    guest.disconnect();
+    spectator.disconnect();
+  }
+}
+
 async function runScenario(mode) {
   const host = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
   const guest = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
@@ -115,6 +203,16 @@ async function runScenario(mode) {
     });
 
     await guestObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 2);
+    await emitAck(guest, "room:send-chat", {
+      roomId: created.roomId,
+      text: `${mode}-hello`
+    });
+    await hostObserver.waitFor(
+      (state) =>
+        state.chatFeed.some(
+          (entry) => entry.playerName === `${mode}-Guest` && entry.text === `${mode}-hello`
+        )
+    );
 
     if (mode === "binary") {
       await emitAck(host, "room:update-settings", {
@@ -220,6 +318,9 @@ async function runGoldenBellScenario() {
     const activeState = await hostObserver.waitFor(
       (state) => state.phase === "round-active" && state.settings.factorResolutionMode === "golden-bell"
     );
+    if (activeState.round?.hasRoundTimer !== false) {
+      throw new Error("골든벨 라운드는 전체 타이머 없이 시작되어야 합니다.");
+    }
 
     await emitAck(host, "round:claim-answer", { roomId: created.roomId });
     await hostObserver.waitFor(
@@ -259,7 +360,77 @@ async function runGoldenBellScenario() {
       mode: "golden-bell",
       roomId: created.roomId,
       prompt: activeState.round?.prompt,
+      hasRoundTimer: activeState.round?.hasRoundTimer,
       hostScoreAfterPenalty: lockedState.players.find((player) => player.name === "golden-Host")?.score,
+      revealedAnswer: endedState.round?.revealedAnswer
+    };
+  } finally {
+    host.disconnect();
+    guest.disconnect();
+  }
+}
+
+async function runSuddenDeathScenario() {
+  const host = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+  const guest = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+
+  const hostObserver = createRoomObserver(host);
+  const guestObserver = createRoomObserver(guest);
+
+  try {
+    await Promise.all([connect(host), connect(guest)]);
+
+    const created = await emitAck(host, "room:create", {
+      playerName: "sudden-Host",
+      settings: {
+        mode: "factor",
+        roundCount: 3,
+        roundTimeSec: 15,
+        factorResolutionMode: "all-play",
+        factorSuddenDeath: true
+      }
+    });
+
+    await hostObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 1);
+
+    await emitAck(guest, "room:join", {
+      roomId: created.roomId,
+      playerName: "sudden-Guest"
+    });
+
+    await guestObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 2);
+
+    await emitAck(guest, "room:set-ready", {
+      roomId: created.roomId,
+      isReady: true
+    });
+
+    await emitAck(host, "game:start", { roomId: created.roomId });
+
+    const suddenState = await hostObserver.waitFor(
+      (state) =>
+        state.phase === "round-active" &&
+        state.round?.isSuddenDeath === true &&
+        state.messageKey === "sudden-death-open"
+    );
+
+    const prompt = suddenState.round?.prompt;
+    if (!prompt) {
+      throw new Error("서든데스 문제를 받지 못했습니다.");
+    }
+
+    await emitAck(host, "round:submit-answer", {
+      roomId: created.roomId,
+      answer: deriveAnswer(prompt)
+    });
+
+    const endedState = await hostObserver.waitFor((state) => state.phase === "round-ended");
+
+    return {
+      mode: "sudden-death",
+      roomId: created.roomId,
+      prompt,
+      messageKey: suddenState.messageKey,
       revealedAnswer: endedState.round?.revealedAnswer
     };
   } finally {

@@ -17,8 +17,10 @@ import type {
   ClaimAnswerRequest,
   CreateRoomRequest,
   JoinRoomRequest,
+  RenamePlayerRequest,
   RenameRoomRequest,
   RoomActionRequest,
+  SendChatRequest,
   SetReadyRequest,
   SocketAck,
   SubmitAnswerRequest,
@@ -31,6 +33,7 @@ import { RoomStore } from "./roomStore.js";
 const port = Number(process.env.PORT ?? 3001);
 const allowedOrigins = readAllowedOrigins();
 const corsOrigin = allowedOrigins.length > 0 ? allowedOrigins : true;
+const maxListenRetries = process.env.NODE_ENV === "development" ? 20 : 5;
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -40,6 +43,8 @@ const io = new Server(httpServer, {
   }
 });
 const roomStore = new RoomStore(io);
+let shuttingDown = false;
+let listenRetryCount = 0;
 
 app.use(
   cors({
@@ -74,6 +79,20 @@ io.on("connection", (socket) => {
     "room:rename",
     (payload: RenameRoomRequest, callback: (result: SocketAck<unknown>) => void) => {
       callback(roomStore.renameRoom(socket, payload));
+    }
+  );
+
+  socket.on(
+    "room:rename-player",
+    (payload: RenamePlayerRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.renamePlayer(socket, payload));
+    }
+  );
+
+  socket.on(
+    "room:become-player",
+    (payload: RoomActionRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.becomePlayer(socket, payload));
     }
   );
 
@@ -116,6 +135,13 @@ io.on("connection", (socket) => {
   );
 
   socket.on(
+    "room:send-chat",
+    (payload: SendChatRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.sendChat(socket, payload));
+    }
+  );
+
+  socket.on(
     "round:next",
     (payload: RoomActionRequest, callback: (result: SocketAck<unknown>) => void) => {
       callback(roomStore.advanceRound(socket, payload));
@@ -134,12 +160,63 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(port, () => {
+function handleServerListening() {
+  httpServer.off("error", handleServerError);
+  listenRetryCount = 0;
   if (allowedOrigins.length === 0 && process.env.NODE_ENV === "production") {
     console.warn("ALLOWED_ORIGINS is not set. Production CORS is fully open.");
   }
   console.log(`FactorRush server listening on http://localhost:${port}`);
-});
+}
+
+function handleServerError(error: NodeJS.ErrnoException) {
+  httpServer.off("listening", handleServerListening);
+
+  if (error.code === "EADDRINUSE" && listenRetryCount < maxListenRetries) {
+    listenRetryCount += 1;
+    const delayMs = 180 * listenRetryCount;
+    console.warn(
+      `Port ${port} is busy. Retrying server bind in ${delayMs}ms (${listenRetryCount}/${maxListenRetries})...`
+    );
+    setTimeout(startServer, delayMs).unref();
+    return;
+  }
+
+  throw error;
+}
+
+function startServer() {
+  httpServer.off("listening", handleServerListening);
+  httpServer.off("error", handleServerError);
+  httpServer.once("listening", handleServerListening);
+  httpServer.once("error", handleServerError);
+  httpServer.listen(port);
+}
+
+startServer();
+
+function shutdown(signal: string) {
+  if (shuttingDown) {
+    return;
+  }
+
+  shuttingDown = true;
+  console.log(`Received ${signal}. Shutting down FactorRush server...`);
+  roomStore.shutdown();
+  io.removeAllListeners();
+  io.close(() => {
+    httpServer.close(() => {
+      process.exit(0);
+    });
+  });
+
+  setTimeout(() => {
+    process.exit(0);
+  }, 3_000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 function readAllowedOrigins() {
   if (!process.env.ALLOWED_ORIGINS) {

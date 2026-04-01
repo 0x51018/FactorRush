@@ -14,14 +14,21 @@ export const ROOM_ID_LENGTH = 6;
 export const ROOM_IDLE_GRACE_MS = 10 * 60 * 1000;
 export const MAX_PLAYERS_PER_ROOM = 12;
 export const FACTOR_PRIME_SHOUT = "야호 소수다";
+export const CHAT_MESSAGE_MAX_LENGTH = 180;
+export const SCORE_BASE_POINTS_BY_RANK = [120, 90, 70, 55] as const;
+export const SCORE_FALLBACK_POINTS = 40;
+export const SCORE_SPEED_BONUS_PER_SECOND = 2;
+export const GOLDEN_BELL_WINDOW_MS = 10_000;
+export const GOLDEN_BELL_PENALTY_POINTS = 60;
+export const MATCH_MAX_DURATION_MS = 60 * 60 * 1000;
 
 export type GameMode = "factor" | "binary";
 export type RoomPhase = "lobby" | "round-active" | "round-ended" | "finished";
 export type BinaryDirection = "decimal-to-binary" | "binary-to-decimal";
 export type FactorPrimeAnswerMode = "phrase" | "number";
 export type FactorResolutionMode = "all-play" | "first-correct" | "golden-bell";
-export type ActivityFeedEntryKind = "wrong-answer" | "chat-like" | "correct-answer" | "system";
 export type SubmissionKind = "correct" | "wrong" | "chat";
+export type RoomRole = "player" | "spectator";
 export type RoomMessageKey =
   | "lobby-ready"
   | "settings-updated"
@@ -31,12 +38,15 @@ export type RoomMessageKey =
   | "golden-bell-claimed"
   | "golden-bell-wrong"
   | "golden-bell-timeout"
+  | "sudden-death-open"
   | "first-correct"
   | "player-correct"
   | "all-correct"
+  | "all-resolved"
   | "time-up"
   | "match-finished"
   | "match-finished-tie"
+  | "match-cap-reached"
   | "reset-lobby"
   | "host-transferred"
   | "player-left";
@@ -46,10 +56,12 @@ export interface LobbySettings {
   roundCount: number;
   roundTimeSec: number;
   binaryDecimalToBinaryChance: number;
+  binaryLivePreview: boolean;
   factorResolutionMode: FactorResolutionMode;
   factorPrimeAnswerMode: FactorPrimeAnswerMode;
   factorOrderedAnswer: boolean;
   factorSingleAttempt: boolean;
+  factorSuddenDeath: boolean;
 }
 
 export interface PlayerSummary {
@@ -62,6 +74,12 @@ export interface PlayerSummary {
   isReady: boolean;
 }
 
+export interface SpectatorSummary {
+  id: string;
+  name: string;
+  connected: boolean;
+}
+
 export interface PlayerRoundStatus {
   playerId: string;
   hasSubmitted: boolean;
@@ -69,6 +87,7 @@ export interface PlayerRoundStatus {
   answer?: string;
   submittedAt?: number;
   pointsAwarded?: number;
+  scoreDelta?: number;
   rank?: number;
   attemptCount: number;
   lastSubmissionKind?: SubmissionKind;
@@ -86,6 +105,8 @@ export interface RoundSnapshot {
   challengeMeta: PrimeFactorChallengeMeta | BinaryChallengeMeta;
   startedAt: number;
   endsAt: number;
+  hasRoundTimer: boolean;
+  isSuddenDeath: boolean;
   answeringPlayerId?: string;
   answerWindowEndsAt?: number;
   transitionEndsAt?: number;
@@ -100,11 +121,13 @@ export interface RoomSnapshot {
   phase: RoomPhase;
   settings: LobbySettings;
   players: PlayerSummary[];
+  spectators: SpectatorSummary[];
   round: RoundSnapshot | null;
   completedRounds: number;
   finalWinnerIds: string[];
-  activityFeed: ActivityFeedEntry[];
+  chatFeed: ChatMessage[];
   matchStartedAt?: number;
+  matchEndsAt?: number;
   totalMatchDurationMs: number;
   averageRoundDurationMs: number;
   autoResetAt?: number;
@@ -144,11 +167,10 @@ export interface SubmissionEvaluation {
   reason: SubmissionKind;
 }
 
-export interface ActivityFeedEntry {
+export interface ChatMessage {
   id: string;
-  kind: ActivityFeedEntryKind;
-  playerId?: string;
-  playerName?: string;
+  playerId: string;
+  playerName: string;
   text: string;
   createdAt: number;
 }
@@ -161,6 +183,7 @@ export interface CreateRoomRequest {
 export interface JoinRoomRequest {
   roomId: string;
   playerName: string;
+  reconnectMemberId?: string;
   reconnectPlayerId?: string;
 }
 
@@ -172,6 +195,11 @@ export interface UpdateSettingsRequest {
 export interface RenameRoomRequest {
   roomId: string;
   roomName: string;
+}
+
+export interface RenamePlayerRequest {
+  roomId: string;
+  playerName: string;
 }
 
 export interface SetReadyRequest {
@@ -193,6 +221,11 @@ export interface SubmitAnswerRequest {
   answer: string;
 }
 
+export interface SendChatRequest {
+  roomId: string;
+  text: string;
+}
+
 export interface ClaimAnswerRequest {
   roomId: string;
 }
@@ -209,6 +242,7 @@ export interface SubmitAnswerResult {
 export interface JoinRoomResult {
   roomId: string;
   playerId: string;
+  role: RoomRole;
 }
 
 export type SocketAck<T> =
@@ -217,13 +251,15 @@ export type SocketAck<T> =
 
 export const DEFAULT_LOBBY_SETTINGS: LobbySettings = {
   mode: "factor",
-  roundCount: 5,
+  roundCount: 15,
   roundTimeSec: 30,
   binaryDecimalToBinaryChance: 50,
+  binaryLivePreview: true,
   factorResolutionMode: "all-play",
   factorPrimeAnswerMode: "phrase",
   factorOrderedAnswer: false,
-  factorSingleAttempt: false
+  factorSingleAttempt: false,
+  factorSuddenDeath: false
 };
 
 const FACTOR_PRIMES = [2, 3, 5, 7, 11, 13, 17, 19];
@@ -250,6 +286,10 @@ export function sanitizeRoomId(input: string) {
   return input.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, ROOM_ID_LENGTH);
 }
 
+export function sanitizeChatMessage(input: string) {
+  return input.replace(/\s+/g, " ").trim().slice(0, CHAT_MESSAGE_MAX_LENGTH);
+}
+
 export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
   return {
     mode: input?.mode === "binary" ? "binary" : "factor",
@@ -260,13 +300,15 @@ export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
       0,
       100
     ),
+    binaryLivePreview: input?.binaryLivePreview ?? DEFAULT_LOBBY_SETTINGS.binaryLivePreview,
     factorResolutionMode:
       input?.factorResolutionMode === "first-correct" || input?.factorResolutionMode === "golden-bell"
         ? input.factorResolutionMode
         : "all-play",
     factorPrimeAnswerMode: input?.factorPrimeAnswerMode === "number" ? "number" : "phrase",
     factorOrderedAnswer: Boolean(input?.factorOrderedAnswer),
-    factorSingleAttempt: Boolean(input?.factorSingleAttempt)
+    factorSingleAttempt: Boolean(input?.factorSingleAttempt),
+    factorSuddenDeath: Boolean(input?.factorSuddenDeath)
   };
 }
 
@@ -353,9 +395,27 @@ export function calculatePoints(rank: number, endsAt: number, submittedAt: numbe
   // - 먼저 맞춘 사람이 높은 기본 점수를 얻고
   // - 남은 시간에 비례한 보너스를 추가로 얻는다.
   const remainingMs = Math.max(0, endsAt - submittedAt);
-  const speedBonus = Math.round(remainingMs / 1000) * 2;
-  const basePoints = [120, 90, 70, 55][rank - 1] ?? 40;
+  const speedBonus = Math.round(remainingMs / 1000) * SCORE_SPEED_BONUS_PER_SECOND;
+  const basePoints = SCORE_BASE_POINTS_BY_RANK[rank - 1] ?? SCORE_FALLBACK_POINTS;
   return basePoints + speedBonus;
+}
+
+export function getBinaryPreviewValue(meta: BinaryChallengeMeta, value: string) {
+  if (meta.direction === "decimal-to-binary") {
+    const normalized = value.replace(/^0b/i, "").replace(/\s+/g, "");
+    if (!/^[01]+$/.test(normalized)) {
+      return "";
+    }
+
+    return String(parseInt(normalized, 2));
+  }
+
+  const parsed = Number(value.replace(/,/g, "").trim());
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return "";
+  }
+
+  return parsed.toString(2);
 }
 
 export function sortPlayersByScore<T extends Pick<PlayerSummary, "score" | "correctAnswers" | "name">>(
