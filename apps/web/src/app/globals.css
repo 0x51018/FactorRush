@@ -16,7 +16,7 @@
   --bg-mid: #dfe4f3;
   --bg-end: #d1d8ee;
   --bg-glow-a: rgba(88, 101, 242, 0.18);
-  --bg-glow-b: rgba(237, 66, 69, 0.12);
+  --bg-glow-b: rgba(228, 68, 96, 0.2);
   --panel: rgba(247, 248, 255, 0.8);
   --panel-strong: rgba(255, 255, 255, 0.92);
   --surface-card: linear-gradient(180deg, rgba(250, 251, 255, 0.92), rgba(241, 244, 255, 0.96));
@@ -26,23 +26,31 @@
   --surface-chip: rgba(255, 255, 255, 0.48);
   --surface-input: rgba(255, 255, 255, 0.76);
   --surface-accent: linear-gradient(180deg, rgba(236, 239, 255, 0.96), rgba(255, 255, 255, 0.74));
-  --surface-warm: linear-gradient(180deg, rgba(255, 238, 240, 0.96), rgba(255, 255, 255, 0.76));
+  --surface-warm: linear-gradient(180deg, rgba(255, 226, 234, 0.96), rgba(255, 255, 255, 0.8));
   --surface-lock: linear-gradient(180deg, rgba(241, 243, 240, 0.92), rgba(255, 255, 255, 0.72));
   --surface-answer: linear-gradient(180deg, rgba(236, 239, 255, 0.96), rgba(255, 255, 255, 0.8));
   --overlay-scrim: rgba(57, 63, 86, 0.28);
   --overlay-scrim-strong: rgba(30, 31, 36, 0.26);
   --hero-watermark: rgba(88, 101, 242, 0.08);
   --number-wall: rgba(70, 79, 108, 0.62);
-  --range-track: linear-gradient(90deg, rgba(88, 101, 242, 0.22), rgba(237, 66, 69, 0.22));
-  --range-thumb-ring: rgba(88, 101, 242, 0.22);
+  --range-track: rgba(255, 255, 255, 0.08);
+  --range-thumb-ring: rgba(228, 68, 96, 0.2);
+  --range-thumb-fill: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(229, 82, 112, 0.94));
   --line: rgba(43, 45, 49, 0.12);
   --line-strong: rgba(88, 101, 242, 0.28);
   --text: #23272f;
   --muted: #626b80;
   --accent: #5865f2;
-  --accent-warm: #ed4245;
+  --accent-warm: #df4868;
   --danger: #ed4245;
+  --positive: #259d63;
   --shadow: 0 28px 80px rgba(37, 41, 52, 0.18);
+  --live-chip-text: #b5334d;
+  --live-chip-bg: rgba(223, 72, 104, 0.1);
+  --live-chip-border: rgba(223, 72, 104, 0.28);
+  --grid-line: rgba(88, 101, 242, 0.12);
+  --grid-opacity: 0.48;
+  --grid-mask: linear-gradient(to bottom, rgba(0, 0, 0, 0.84), rgba(0, 0, 0, 0.28));
 }
 
 html[data-theme="dark"] {
@@ -53,7 +61,7 @@ html[data-theme="dark"] {
   --bg-mid: #23262f;
   --bg-end: #171a21;
   --bg-glow-a: rgba(88, 101, 242, 0.24);
-  --bg-glow-b: rgba(237, 66, 69, 0.16);
+  --bg-glow-b: rgba(208, 86, 108, 0.18);
   --panel: rgba(33, 37, 46, 0.84);
   --panel-strong: rgba(39, 43, 54, 0.94);
   --surface-card: linear-gradient(180deg, rgba(46, 50, 62, 0.96), rgba(30, 34, 42, 0.98));
@@ -63,23 +71,31 @@ html[data-theme="dark"] {
   --surface-chip: rgba(37, 41, 50, 0.84);
   --surface-input: rgba(24, 27, 34, 0.92);
   --surface-accent: linear-gradient(180deg, rgba(71, 80, 150, 0.42), rgba(43, 47, 59, 0.94));
-  --surface-warm: linear-gradient(180deg, rgba(128, 53, 68, 0.36), rgba(48, 39, 47, 0.96));
+  --surface-warm: linear-gradient(180deg, rgba(96, 58, 69, 0.42), rgba(33, 37, 47, 0.96));
   --surface-lock: linear-gradient(180deg, rgba(55, 58, 68, 0.9), rgba(35, 38, 47, 0.96));
   --surface-answer: linear-gradient(180deg, rgba(57, 66, 137, 0.34), rgba(34, 38, 49, 0.96));
   --overlay-scrim: rgba(7, 9, 14, 0.54);
   --overlay-scrim-strong: rgba(5, 7, 11, 0.62);
   --hero-watermark: rgba(109, 120, 245, 0.1);
   --number-wall: rgba(199, 205, 219, 0.58);
-  --range-track: linear-gradient(90deg, rgba(109, 120, 245, 0.34), rgba(237, 66, 69, 0.34));
-  --range-thumb-ring: rgba(109, 120, 245, 0.32);
+  --range-track: rgba(255, 255, 255, 0.08);
+  --range-thumb-ring: rgba(255, 142, 154, 0.18);
+  --range-thumb-fill: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(216, 104, 123, 0.94));
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(88, 101, 242, 0.34);
   --text: #f2f3f5;
   --muted: #b5bac1;
   --accent: #6d78f5;
-  --accent-warm: #ed4245;
+  --accent-warm: #f2a3ad;
   --danger: #ff6b6f;
+  --positive: #4fd18b;
   --shadow: 0 30px 90px rgba(0, 0, 0, 0.42);
+  --live-chip-text: #ffd1d6;
+  --live-chip-bg: rgba(198, 88, 109, 0.12);
+  --live-chip-border: rgba(231, 147, 159, 0.28);
+  --grid-line: rgba(255, 255, 255, 0.14);
+  --grid-opacity: 0.36;
+  --grid-mask: linear-gradient(to bottom, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0.22));
 }
 
 * {

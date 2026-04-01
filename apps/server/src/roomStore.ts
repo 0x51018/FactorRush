@@ -25,21 +25,28 @@ import {
   createInvitePath,
   createRoomCode,
   evaluateSubmission,
+  GOLDEN_BELL_PENALTY_POINTS,
+  GOLDEN_BELL_WINDOW_MS,
+  MATCH_MAX_DURATION_MS,
   generateChallenge,
+  sanitizeChatMessage,
   sanitizePlayerName,
   sanitizeRoomId,
   sortPlayersByScore,
-  type ActivityFeedEntry,
+  type ChatMessage,
   type Challenge,
   type CreateRoomRequest,
   type JoinRoomRequest,
   type JoinRoomResult,
   type LobbySettings,
   type PlayerSummary,
+  type RoomRole,
+  type RenamePlayerRequest,
   type RoomActionRequest,
   type RoomMessageKey,
   type RoomPhase,
   type RoomSnapshot,
+  type SendChatRequest,
   type SetReadyRequest,
   type SocketAck,
   type SubmitAnswerRequest,
@@ -51,6 +58,15 @@ import {
 
 interface PlayerRecord extends PlayerSummary {
   socketId: string;
+  recentChatTimestamps: number[];
+}
+
+interface SpectatorRecord {
+  id: string;
+  name: string;
+  connected: boolean;
+  socketId: string;
+  recentChatTimestamps: number[];
 }
 
 interface AttemptRecord {
@@ -59,6 +75,7 @@ interface AttemptRecord {
   normalizedAnswer: string;
   submittedAt: number;
   kind: Exclude<SubmissionKind, "correct">;
+  scoreDelta: number;
 }
 
 interface SubmissionRecord {
@@ -75,6 +92,8 @@ interface InternalRound {
   challenge: Challenge;
   startedAt: number;
   endsAt: number;
+  hasRoundTimer: boolean;
+  isSuddenDeath: boolean;
   answeringPlayerId: string | null;
   answerWindowEndsAt?: number;
   transitionEndsAt?: number;
@@ -91,14 +110,17 @@ interface RoomRecord {
   phase: RoomPhase;
   settings: LobbySettings;
   players: PlayerRecord[];
+  spectators: SpectatorRecord[];
   round: InternalRound | null;
   completedRounds: number;
   matchStartedAt?: number;
+  matchEndsAt?: number;
   autoResetAt?: number;
   completedRoundDurationsMs: number[];
-  activityFeed: ActivityFeedEntry[];
+  chatFeed: ChatMessage[];
   cleanupTimer: NodeJS.Timeout | null;
   transitionTimer: NodeJS.Timeout | null;
+  matchCapTimer: NodeJS.Timeout | null;
   finalWinnerIds: string[];
   message: string;
   messageKey: RoomMessageKey;
@@ -108,17 +130,29 @@ interface RoomRecord {
 const ROUND_REVEAL_MS = 5500;
 const FINAL_RESULTS_DELAY_MS = 1800;
 const RESULTS_AUTO_RESET_MS = 15000;
-const ACTIVITY_FEED_LIMIT = 18;
-const GOLDEN_BELL_WINDOW_MS = 6000;
-const GOLDEN_BELL_PENALTY_POINTS = 60;
-
+const CHAT_FEED_LIMIT = 40;
+const CHAT_RATE_LIMIT_WINDOW_MS = 10_000;
+const CHAT_RATE_LIMIT_MAX_MESSAGES = 5;
 export class RoomStore {
   // rooms: 실제 방 상태 저장소
   private readonly rooms = new Map<string, RoomRecord>();
-  // socketToSeat: 소켓이 어느 방의 어느 플레이어인지 역추적하기 위한 인덱스
-  private readonly socketToSeat = new Map<string, { roomId: string; playerId: string }>();
+  // socketToSeat: 소켓이 어느 방의 어느 멤버(플레이어/관전자)인지 역추적하기 위한 인덱스
+  private readonly socketToSeat = new Map<string, { roomId: string; memberId: string; role: RoomRole }>();
 
   constructor(private readonly io: Server) {}
+
+  shutdown() {
+    for (const room of this.rooms.values()) {
+      this.clearRoundTimer(room);
+      this.clearTransitionTimer(room);
+      this.clearAnswerWindowTimer(room);
+      this.clearCleanupTimer(room);
+      this.clearMatchCapTimer(room);
+    }
+
+    this.rooms.clear();
+    this.socketToSeat.clear();
+  }
 
   createRoom(socket: Socket, request: CreateRoomRequest): SocketAck<JoinRoomResult> {
     if (this.socketToSeat.has(socket.id)) {
@@ -147,24 +181,28 @@ export class RoomStore {
           connected: true,
           correctAnswers: 0,
           isReady: false,
-          socketId: socket.id
+          socketId: socket.id,
+          recentChatTimestamps: []
         }
       ],
+      spectators: [],
       round: null,
       completedRounds: 0,
       matchStartedAt: undefined,
+      matchEndsAt: undefined,
       autoResetAt: undefined,
       completedRoundDurationsMs: [],
-      activityFeed: [],
+      chatFeed: [],
       cleanupTimer: null,
       transitionTimer: null,
+      matchCapTimer: null,
       finalWinnerIds: [],
       message: "Share the invite link and tune the room settings before you start.",
       messageKey: "lobby-ready"
     };
 
     this.rooms.set(roomId, room);
-    this.socketToSeat.set(socket.id, { roomId, playerId });
+    this.socketToSeat.set(socket.id, { roomId, memberId: playerId, role: "player" });
     socket.join(roomId);
     this.emitRoom(room);
 
@@ -172,7 +210,8 @@ export class RoomStore {
       ok: true,
       data: {
         roomId,
-        playerId
+        playerId,
+        role: "player"
       }
     };
   }
@@ -191,10 +230,10 @@ export class RoomStore {
 
     this.clearCleanupTimer(room);
 
-    // 로컬 스토리지에 남아 있는 playerId가 있으면 "재접속"을 우선 시도한다.
-    const reconnectPlayerId = request.reconnectPlayerId?.trim();
-    if (reconnectPlayerId) {
-      const reconnectingPlayer = room.players.find((player) => player.id === reconnectPlayerId);
+    // 로컬 스토리지에 남아 있는 멤버 ID가 있으면 "재접속"을 우선 시도한다.
+    const reconnectMemberId = request.reconnectMemberId?.trim() || request.reconnectPlayerId?.trim();
+    if (reconnectMemberId) {
+      const reconnectingPlayer = room.players.find((player) => player.id === reconnectMemberId);
       if (reconnectingPlayer && !reconnectingPlayer.connected) {
         if (reconnectingPlayer.socketId) {
           this.socketToSeat.delete(reconnectingPlayer.socketId);
@@ -205,10 +244,10 @@ export class RoomStore {
 
         const nextName = sanitizePlayerName(request.playerName);
         if (nextName) {
-          reconnectingPlayer.name = this.createUniquePlayerName(room, nextName, reconnectPlayerId);
+          reconnectingPlayer.name = this.createUniqueMemberName(room, nextName, reconnectMemberId);
         }
 
-        this.socketToSeat.set(socket.id, { roomId, playerId: reconnectPlayerId });
+        this.socketToSeat.set(socket.id, { roomId, memberId: reconnectMemberId, role: "player" });
         socket.join(roomId);
         this.emitRoom(room);
 
@@ -216,14 +255,41 @@ export class RoomStore {
           ok: true,
           data: {
             roomId,
-            playerId: reconnectPlayerId
+            playerId: reconnectMemberId,
+            role: "player"
           }
         };
       }
-    }
 
-    if (room.players.length >= MAX_PLAYERS_PER_ROOM) {
-      return { ok: false, error: "That room is already full." };
+      const reconnectingSpectator = room.spectators.find(
+        (spectator) => spectator.id === reconnectMemberId
+      );
+      if (reconnectingSpectator && !reconnectingSpectator.connected) {
+        if (reconnectingSpectator.socketId) {
+          this.socketToSeat.delete(reconnectingSpectator.socketId);
+        }
+
+        reconnectingSpectator.socketId = socket.id;
+        reconnectingSpectator.connected = true;
+
+        const nextName = sanitizePlayerName(request.playerName);
+        if (nextName) {
+          reconnectingSpectator.name = this.createUniqueMemberName(room, nextName, reconnectMemberId);
+        }
+
+        this.socketToSeat.set(socket.id, { roomId, memberId: reconnectMemberId, role: "spectator" });
+        socket.join(roomId);
+        this.emitRoom(room);
+
+        return {
+          ok: true,
+          data: {
+            roomId,
+            playerId: reconnectMemberId,
+            role: "spectator"
+          }
+        };
+      }
     }
 
     const sanitizedName = sanitizePlayerName(request.playerName);
@@ -231,19 +297,50 @@ export class RoomStore {
       return { ok: false, error: "Add a nickname before joining the room." };
     }
 
+    if (room.phase !== "lobby") {
+      const spectatorId = createId("spectator");
+      const spectatorName = this.createUniqueMemberName(room, sanitizedName);
+      room.spectators.push({
+        id: spectatorId,
+        name: spectatorName,
+        connected: true,
+        socketId: socket.id,
+        recentChatTimestamps: []
+      });
+
+      this.socketToSeat.set(socket.id, { roomId, memberId: spectatorId, role: "spectator" });
+      socket.join(roomId);
+      this.emitRoom(room);
+
+      return {
+        ok: true,
+        data: {
+          roomId,
+          playerId: spectatorId,
+          role: "spectator"
+        }
+      };
+    }
+
+    if (room.players.length >= MAX_PLAYERS_PER_ROOM) {
+      return { ok: false, error: "That room is already full." };
+    }
+
     const playerId = createId("player");
+    const playerName = this.createUniqueMemberName(room, sanitizedName);
     room.players.push({
       id: playerId,
-      name: this.createUniquePlayerName(room, sanitizedName),
+      name: playerName,
       score: 0,
       isHost: false,
       connected: true,
       correctAnswers: 0,
       isReady: false,
-      socketId: socket.id
+      socketId: socket.id,
+      recentChatTimestamps: []
     });
 
-    this.socketToSeat.set(socket.id, { roomId, playerId });
+    this.socketToSeat.set(socket.id, { roomId, memberId: playerId, role: "player" });
     socket.join(roomId);
     this.emitRoom(room);
 
@@ -251,13 +348,14 @@ export class RoomStore {
       ok: true,
       data: {
         roomId,
-        playerId
+        playerId,
+        role: "player"
       }
     };
   }
 
   updateSettings(socket: Socket, request: UpdateSettingsRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -297,7 +395,7 @@ export class RoomStore {
   }
 
   renameRoom(socket: Socket, request: { roomId: string; roomName: string }): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -318,8 +416,91 @@ export class RoomStore {
     return { ok: true, data: null };
   }
 
+  renamePlayer(socket: Socket, request: RenamePlayerRequest): SocketAck<null> {
+    const membership = this.getSeatMembership(socket.id, request.roomId);
+    if (!membership.ok) {
+      return membership;
+    }
+
+    const { room } = membership.data;
+    if (room.phase !== "lobby") {
+      return { ok: false, error: "You can rename your nickname in the lobby only." };
+    }
+
+    const nextRequestedName = sanitizePlayerName(request.playerName);
+    if (!nextRequestedName) {
+      return { ok: false, error: "Add a nickname before saving." };
+    }
+
+    const member = membership.data.role === "player" ? membership.data.player : membership.data.spectator;
+    const previousName = member.name;
+    const nextName = this.createUniqueMemberName(room, nextRequestedName, member.id);
+    member.name = nextName;
+
+    const previousDefaultRoomName = `${previousName}님의 방`;
+    if (membership.data.role === "player" && membership.data.player.isHost && room.roomName === previousDefaultRoomName) {
+      room.roomName = `${nextName}님의 방`;
+    }
+
+    this.emitRoom(room);
+    return { ok: true, data: null };
+  }
+
+  becomePlayer(socket: Socket, request: RoomActionRequest): SocketAck<JoinRoomResult> {
+    const membership = this.getSeatMembership(socket.id, request.roomId);
+    if (!membership.ok) {
+      return membership;
+    }
+
+    if (membership.data.role === "player") {
+      return {
+        ok: true,
+        data: {
+          roomId: membership.data.room.roomId,
+          playerId: membership.data.player.id,
+          role: "player"
+        }
+      };
+    }
+
+    const { room, spectator } = membership.data;
+    if (room.phase !== "lobby") {
+      return { ok: false, error: "You can only take a player seat from the lobby." };
+    }
+
+    if (room.players.length >= MAX_PLAYERS_PER_ROOM) {
+      return { ok: false, error: "All player seats are already taken." };
+    }
+
+    room.spectators = room.spectators.filter((candidate) => candidate.id !== spectator.id);
+    const playerId = createId("player");
+    room.players.push({
+      id: playerId,
+      name: this.createUniqueMemberName(room, spectator.name),
+      score: 0,
+      isHost: false,
+      connected: true,
+      correctAnswers: 0,
+      isReady: false,
+      socketId: socket.id,
+      recentChatTimestamps: spectator.recentChatTimestamps
+    });
+
+    this.socketToSeat.set(socket.id, { roomId: room.roomId, memberId: playerId, role: "player" });
+    this.emitRoom(room);
+
+    return {
+      ok: true,
+      data: {
+        roomId: room.roomId,
+        playerId,
+        role: "player"
+      }
+    };
+  }
+
   setReady(socket: Socket, request: SetReadyRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -347,7 +528,7 @@ export class RoomStore {
   }
 
   startGame(socket: Socket, request: RoomActionRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -375,16 +556,17 @@ export class RoomStore {
     room.completedRounds = 0;
     room.finalWinnerIds = [];
     room.completedRoundDurationsMs = [];
-    room.activityFeed = [];
     room.matchStartedAt = Date.now();
+    room.matchEndsAt = room.matchStartedAt + MATCH_MAX_DURATION_MS;
     room.messagePlayerName = undefined;
+    this.scheduleMatchCapTimer(room);
     this.startRound(room);
 
     return { ok: true, data: null };
   }
 
   advanceRound(socket: Socket, request: RoomActionRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -403,7 +585,7 @@ export class RoomStore {
   }
 
   transferHost(socket: Socket, request: TransferHostRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -438,13 +620,14 @@ export class RoomStore {
   }
 
   resetToLobby(socket: Socket, request: RoomActionRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getSeatMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
 
-    const { room, player } = membership.data;
-    if (!player.isHost && room.phase !== "finished") {
+    const { room } = membership.data;
+    const isHostPlayer = membership.data.role === "player" && membership.data.player.isHost;
+    if (!isHostPlayer && room.phase !== "finished") {
       return { ok: false, error: "Only the host can reset the room." };
     }
 
@@ -453,8 +636,43 @@ export class RoomStore {
     return { ok: true, data: null };
   }
 
+  sendChat(socket: Socket, request: SendChatRequest): SocketAck<null> {
+    const membership = this.getSeatMembership(socket.id, request.roomId);
+    if (!membership.ok) {
+      return membership;
+    }
+
+    const { room } = membership.data;
+    const member = membership.data.role === "player" ? membership.data.player : membership.data.spectator;
+    const text = sanitizeChatMessage(request.text);
+    if (!text) {
+      return { ok: false, error: "Enter a message before sending chat." };
+    }
+
+    const now = Date.now();
+    member.recentChatTimestamps = member.recentChatTimestamps.filter(
+      (timestamp) => now - timestamp < CHAT_RATE_LIMIT_WINDOW_MS
+    );
+
+    if (member.recentChatTimestamps.length >= CHAT_RATE_LIMIT_MAX_MESSAGES) {
+      return { ok: false, error: "You are sending messages too quickly. Wait a moment." };
+    }
+
+    member.recentChatTimestamps.push(now);
+    this.addChatMessage(room, {
+      id: createId("chat"),
+      playerId: member.id,
+      playerName: member.name,
+      text,
+      createdAt: now
+    });
+    this.emitRoom(room);
+
+    return { ok: true, data: null };
+  }
+
   claimAnswer(socket: Socket, request: ClaimAnswerRequest): SocketAck<null> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -484,7 +702,7 @@ export class RoomStore {
       return { ok: false, error: "Another player is already answering right now." };
     }
 
-    const remainingMs = Math.max(0, room.round.endsAt - Date.now());
+    const remainingMs = this.getRemainingMatchMs(room);
     if (remainingMs <= 0) {
       return { ok: false, error: "The round is already ending." };
     }
@@ -505,7 +723,7 @@ export class RoomStore {
   }
 
   submitAnswer(socket: Socket, request: SubmitAnswerRequest): SocketAck<SubmitAnswerResult> {
-    const membership = this.getMembership(socket.id, request.roomId);
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
     if (!membership.ok) {
       return membership;
     }
@@ -552,26 +770,6 @@ export class RoomStore {
     // 정답 여부는 반드시 서버 기준으로 판정해서 점수와 순위를 신뢰 가능하게 유지한다.
     const evaluation = evaluateSubmission(room.round.challenge, request.answer);
     if (!evaluation.isCorrect && evaluation.reason === "chat" && !isGoldenBellMode) {
-      const rawAnswer = request.answer.trim();
-      if (rawAnswer) {
-        room.round.attempts.push({
-          playerId: player.id,
-          answer: rawAnswer,
-          normalizedAnswer: "",
-          submittedAt: Date.now(),
-          kind: "chat"
-        });
-        this.addActivity(room, {
-          id: createId("feed"),
-          kind: "chat-like",
-          playerId: player.id,
-          playerName: player.name,
-          text: rawAnswer,
-          createdAt: Date.now()
-        });
-        this.emitRoom(room);
-      }
-
       return {
         ok: true,
         data: {
@@ -601,15 +799,8 @@ export class RoomStore {
         answer: request.answer.trim(),
         normalizedAnswer: evaluation.normalizedAnswer,
         submittedAt,
-        kind: "wrong"
-      });
-      this.addActivity(room, {
-        id: createId("feed"),
-        kind: "wrong-answer",
-        playerId: player.id,
-        playerName: player.name,
-        text: request.answer.trim(),
-        createdAt: submittedAt
+        kind: "wrong",
+        scoreDelta: 0
       });
       this.emitRoom(room);
 
@@ -633,7 +824,12 @@ export class RoomStore {
 
     const submittedAt = Date.now();
     const rank = room.round.submissions.length + 1;
-    const pointsAwarded = calculatePoints(rank, room.round.endsAt, submittedAt);
+    const scoringEndsAt = isGoldenBellMode
+      ? room.round.answerWindowEndsAt ?? submittedAt
+      : room.round.hasRoundTimer
+        ? room.round.endsAt
+        : submittedAt;
+    const pointsAwarded = calculatePoints(rank, scoringEndsAt, submittedAt);
     room.round.submissions.push({
       playerId: player.id,
       answer: request.answer.trim(),
@@ -645,14 +841,6 @@ export class RoomStore {
 
     player.score += pointsAwarded;
     player.correctAnswers += 1;
-    this.addActivity(room, {
-      id: createId("feed"),
-      kind: "correct-answer",
-      playerId: player.id,
-      playerName: player.name,
-      text: request.answer.trim(),
-      createdAt: submittedAt
-    });
 
     if (rank === 1) {
       room.message = `${player.name} landed the first correct answer.`;
@@ -665,7 +853,9 @@ export class RoomStore {
 
     if (
       room.settings.mode === "factor" &&
-      (room.settings.factorResolutionMode === "first-correct" || isGoldenBellMode) &&
+      (room.settings.factorResolutionMode === "first-correct" ||
+        isGoldenBellMode ||
+        room.round.isSuddenDeath) &&
       rank === 1
     ) {
       this.endRound(room.roomId, "first-correct");
@@ -697,7 +887,23 @@ export class RoomStore {
       return;
     }
 
-    const player = room.players.find((candidate) => candidate.id === seat.playerId);
+    if (seat.role === "spectator") {
+      const spectator = room.spectators.find((candidate) => candidate.id === seat.memberId);
+      if (!spectator) {
+        return;
+      }
+
+      room.spectators = room.spectators.filter((candidate) => candidate.id !== spectator.id);
+      if (room.players.length === 0 && room.spectators.length === 0) {
+        this.scheduleCleanup(room);
+        return;
+      }
+
+      this.emitRoom(room);
+      return;
+    }
+
+    const player = room.players.find((candidate) => candidate.id === seat.memberId);
     if (!player) {
       return;
     }
@@ -708,6 +914,16 @@ export class RoomStore {
     room.players = room.players.filter((candidate) => candidate.id !== player.id);
 
     if (room.players.length === 0) {
+      if (room.spectators.length > 0) {
+        this.resetRoomToLobby(room);
+        this.promoteFirstSpectatorToHost(room);
+        room.message = `${room.players[0]?.name ?? "A spectator"} took the host seat after everyone left.`;
+        room.messageKey = "host-transferred";
+        room.messagePlayerName = room.players[0]?.name;
+        this.emitRoom(room);
+        return;
+      }
+
       this.scheduleCleanup(room);
       return;
     }
@@ -726,6 +942,11 @@ export class RoomStore {
       room.round.answerWindowEndsAt = undefined;
     }
 
+    if (this.haveAllGoldenBellPlayersResolved(room)) {
+      this.endRound(room.roomId, "all-resolved");
+      return;
+    }
+
     if (this.haveAllConnectedPlayersAnswered(room)) {
       this.endRound(room.roomId, "all-correct");
       return;
@@ -738,7 +959,13 @@ export class RoomStore {
     this.emitRoom(room);
   }
 
-  private getMembership(socketId: string, roomId: string): SocketAck<{ room: RoomRecord; player: PlayerRecord }> {
+  private getSeatMembership(
+    socketId: string,
+    roomId: string
+  ): SocketAck<
+    | { room: RoomRecord; role: "player"; player: PlayerRecord }
+    | { room: RoomRecord; role: "spectator"; spectator: SpectatorRecord }
+  > {
     const seat = this.socketToSeat.get(socketId);
     if (!seat || seat.roomId !== sanitizeRoomId(roomId)) {
       return { ok: false, error: "You are not connected to that room." };
@@ -749,12 +976,34 @@ export class RoomStore {
       return { ok: false, error: "That room has already been closed." };
     }
 
-    const player = room.players.find((candidate) => candidate.id === seat.playerId);
+    if (seat.role === "spectator") {
+      const spectator = room.spectators.find((candidate) => candidate.id === seat.memberId);
+      if (!spectator) {
+        return { ok: false, error: "Your seat in this room is no longer available." };
+      }
+
+      return { ok: true, data: { room, role: "spectator", spectator } };
+    }
+
+    const player = room.players.find((candidate) => candidate.id === seat.memberId);
     if (!player) {
       return { ok: false, error: "Your seat in this room is no longer available." };
     }
 
-    return { ok: true, data: { room, player } };
+    return { ok: true, data: { room, role: "player", player } };
+  }
+
+  private getPlayerMembership(socketId: string, roomId: string): SocketAck<{ room: RoomRecord; player: PlayerRecord }> {
+    const membership = this.getSeatMembership(socketId, roomId);
+    if (!membership.ok) {
+      return membership;
+    }
+
+    if (membership.data.role !== "player") {
+      return { ok: false, error: "Spectators cannot use that action." };
+    }
+
+    return { ok: true, data: { room: membership.data.room, player: membership.data.player } };
   }
 
   private createUniqueRoomId() {
@@ -765,11 +1014,11 @@ export class RoomStore {
     return roomId;
   }
 
-  private createUniquePlayerName(room: RoomRecord, requestedName: string, excludedPlayerId?: string) {
+  private createUniqueMemberName(room: RoomRecord, requestedName: string, excludedMemberId?: string) {
     const takenNames = new Set(
-      room.players
-        .filter((player) => player.id !== excludedPlayerId)
-        .map((player) => player.name.toLowerCase())
+      [...room.players, ...room.spectators]
+        .filter((member) => member.id !== excludedMemberId)
+        .map((member) => member.name.toLowerCase())
     );
 
     if (!takenNames.has(requestedName.toLowerCase())) {
@@ -796,13 +1045,17 @@ export class RoomStore {
     const now = Date.now();
     const roundNumber = room.completedRounds + 1;
     const challenge = generateChallenge(room.settings);
+    const hasRoundTimer =
+      !(room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell");
     room.phase = "round-active";
     room.autoResetAt = undefined;
     room.round = {
       roundNumber,
       challenge,
       startedAt: now,
-      endsAt: now + room.settings.roundTimeSec * 1000,
+      endsAt: hasRoundTimer ? now + room.settings.roundTimeSec * 1000 : 0,
+      hasRoundTimer,
+      isSuddenDeath: false,
       answeringPlayerId: null,
       submissions: [],
       attempts: [],
@@ -811,24 +1064,39 @@ export class RoomStore {
     };
     room.message =
       room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
-        ? `Round ${roundNumber} is live. Buzz first to earn the answer chance.`
+        ? `Round ${roundNumber} is live. Buzz first to earn a 10-second answer window.`
         : `Round ${roundNumber} is live. Fast correct answers get the biggest score boost.`;
     room.messageKey =
       room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
         ? "golden-bell-open"
         : "round-live";
     room.messagePlayerName = undefined;
-    // 라운드 종료는 타이머 만료 또는 전원 정답 제출 두 경로로 일어난다.
-    room.round.timer = setTimeout(() => {
-      this.endRound(room.roomId, "timer");
-    }, room.settings.roundTimeSec * 1000);
+
+    if (hasRoundTimer) {
+      // 라운드 종료는 타이머 만료 또는 전원 정답 제출 두 경로로 일어난다.
+      room.round.timer = setTimeout(() => {
+        this.endRound(room.roomId, "timer");
+      }, room.settings.roundTimeSec * 1000);
+    }
 
     this.emitRoom(room);
   }
 
-  private endRound(roomId: string, reason: "timer" | "all-correct" | "first-correct") {
+  private endRound(roomId: string, reason: "timer" | "all-correct" | "first-correct" | "all-resolved") {
     const room = this.rooms.get(roomId);
     if (!room || room.phase !== "round-active" || !room.round) {
+      return;
+    }
+
+    if (
+      reason === "timer" &&
+      room.settings.mode === "factor" &&
+      room.settings.factorResolutionMode === "all-play" &&
+      room.settings.factorSuddenDeath &&
+      room.round.submissions.length === 0 &&
+      !room.round.isSuddenDeath
+    ) {
+      this.enterSuddenDeath(room);
       return;
     }
 
@@ -852,6 +1120,10 @@ export class RoomStore {
       room.message = "Everyone still connected solved it. The next round will begin shortly.";
       room.messageKey = "all-correct";
       room.messagePlayerName = undefined;
+    } else if (reason === "all-resolved") {
+      room.message = "All answer chances are resolved. The answer is now on screen.";
+      room.messageKey = "all-resolved";
+      room.messagePlayerName = undefined;
     } else {
       room.message = "Time is up. The correct answer is now on screen.";
       room.messageKey = "time-up";
@@ -874,24 +1146,68 @@ export class RoomStore {
     this.clearTransitionTimer(room);
 
     if (room.completedRounds >= room.settings.roundCount) {
-      room.phase = "finished";
-      room.finalWinnerIds = this.computeWinnerIds(room);
-      room.autoResetAt = Date.now() + RESULTS_AUTO_RESET_MS;
-      room.message =
-        room.finalWinnerIds.length > 1
-          ? "The match is over with a tie at the top."
-          : "The match is over. Final scores are locked in.";
-      room.messageKey =
-        room.finalWinnerIds.length > 1 ? "match-finished-tie" : "match-finished";
-      room.messagePlayerName = undefined;
-      this.emitRoom(room);
-      room.transitionTimer = setTimeout(() => {
-        this.resetRoomToLobby(room);
-      }, RESULTS_AUTO_RESET_MS);
+      this.finalizeMatch(room);
       return;
     }
 
     this.startRound(room);
+  }
+
+  private enterSuddenDeath(room: RoomRecord) {
+    if (!room.round) {
+      return;
+    }
+
+    this.clearRoundTimer(room);
+    this.clearAnswerWindowTimer(room);
+    room.round.hasRoundTimer = false;
+    room.round.isSuddenDeath = true;
+    room.round.endsAt = 0;
+    room.message = "No one solved it in time. Sudden death is now live.";
+    room.messageKey = "sudden-death-open";
+    room.messagePlayerName = undefined;
+    this.emitRoom(room);
+  }
+
+  private finalizeMatch(room: RoomRecord, options?: { capped?: boolean }) {
+    this.clearRoundTimer(room);
+    this.clearTransitionTimer(room);
+    this.clearAnswerWindowTimer(room);
+    this.clearMatchCapTimer(room);
+    room.phase = "finished";
+    room.finalWinnerIds = this.computeWinnerIds(room);
+    room.autoResetAt = Date.now() + RESULTS_AUTO_RESET_MS;
+    room.message = options?.capped
+      ? "The match hit the one-hour cap and was closed on the current scores."
+      : room.finalWinnerIds.length > 1
+        ? "The match is over with a tie at the top."
+        : "The match is over. Final scores are locked in.";
+    room.messageKey = options?.capped
+      ? "match-cap-reached"
+      : room.finalWinnerIds.length > 1
+        ? "match-finished-tie"
+        : "match-finished";
+    room.messagePlayerName = undefined;
+    this.emitRoom(room);
+    room.transitionTimer = setTimeout(() => {
+      this.resetRoomToLobby(room);
+    }, RESULTS_AUTO_RESET_MS);
+  }
+
+  private forceFinishMatch(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.phase === "lobby" || room.phase === "finished") {
+      return;
+    }
+
+    if (room.phase === "round-active" && room.round) {
+      room.completedRoundDurationsMs.push(Math.max(0, Date.now() - room.round.startedAt));
+      room.round.answeringPlayerId = null;
+      room.round.answerWindowEndsAt = undefined;
+      room.round.transitionEndsAt = undefined;
+    }
+
+    this.finalizeMatch(room, { capped: true });
   }
 
   private computeWinnerIds(room: RoomRecord) {
@@ -969,30 +1285,15 @@ export class RoomStore {
       answer: input.answer,
       normalizedAnswer: input.normalizedAnswer,
       submittedAt,
-      kind: "wrong"
+      kind: "wrong",
+      scoreDelta: -GOLDEN_BELL_PENALTY_POINTS
     });
     player.score -= GOLDEN_BELL_PENALTY_POINTS;
 
     if (input.reason === "timeout") {
-      this.addActivity(room, {
-        id: createId("feed"),
-        kind: "system",
-        playerId: player.id,
-        playerName: player.name,
-        text: `${player.name} missed the golden bell answer window.`,
-        createdAt: submittedAt
-      });
       room.message = `${player.name} missed the golden bell answer window.`;
       room.messageKey = "golden-bell-timeout";
     } else {
-      this.addActivity(room, {
-        id: createId("feed"),
-        kind: "wrong-answer",
-        playerId: player.id,
-        playerName: player.name,
-        text: input.answer,
-        createdAt: submittedAt
-      });
       room.message = `${player.name} missed the golden bell answer and lost points.`;
       room.messageKey = "golden-bell-wrong";
     }
@@ -1000,7 +1301,7 @@ export class RoomStore {
     room.messagePlayerName = player.name;
 
     if (this.haveAllGoldenBellPlayersResolved(room)) {
-      this.endRound(room.roomId, "timer");
+      this.endRound(room.roomId, "all-resolved");
     } else {
       this.emitRoom(room);
     }
@@ -1036,6 +1337,10 @@ export class RoomStore {
     );
   }
 
+  private getRemainingMatchMs(room: RoomRecord) {
+    return room.matchEndsAt ? Math.max(0, room.matchEndsAt - Date.now()) : MATCH_MAX_DURATION_MS;
+  }
+
   private isPlayerLockedOutForRound(room: RoomRecord, playerId: string) {
     const wrongAttempts = this.getWrongAttemptCount(room, playerId);
 
@@ -1058,6 +1363,29 @@ export class RoomStore {
         player.isReady = false;
       }
     }
+    return nextHost;
+  }
+
+  private promoteFirstSpectatorToHost(room: RoomRecord) {
+    const promoted = room.spectators.shift();
+    if (!promoted) {
+      return null;
+    }
+
+    const playerId = createId("player");
+    room.players.push({
+      id: playerId,
+      name: this.createUniqueMemberName(room, promoted.name),
+      score: 0,
+      isHost: true,
+      connected: true,
+      correctAnswers: 0,
+      isReady: false,
+      socketId: promoted.socketId,
+      recentChatTimestamps: promoted.recentChatTimestamps
+    });
+    this.socketToSeat.set(promoted.socketId, { roomId: room.roomId, memberId: playerId, role: "player" });
+    return room.players.at(-1) ?? null;
   }
 
   private resetRoomScores(room: RoomRecord) {
@@ -1072,8 +1400,8 @@ export class RoomStore {
     this.io.to(room.roomId).emit("room:state", this.toSnapshot(room));
   }
 
-  private addActivity(room: RoomRecord, entry: ActivityFeedEntry) {
-    room.activityFeed = [...room.activityFeed, entry].slice(-ACTIVITY_FEED_LIMIT);
+  private addChatMessage(room: RoomRecord, entry: ChatMessage) {
+    room.chatFeed = [...room.chatFeed, entry].slice(-CHAT_FEED_LIMIT);
   }
 
   private toSnapshot(room: RoomRecord): RoomSnapshot {
@@ -1094,6 +1422,11 @@ export class RoomStore {
         correctAnswers: player.correctAnswers,
         isReady: player.isReady
       })),
+      spectators: room.spectators.map((spectator) => ({
+        id: spectator.id,
+        name: spectator.name,
+        connected: spectator.connected
+      })),
       round: room.round
         ? {
             roundNumber: room.round.roundNumber,
@@ -1103,6 +1436,8 @@ export class RoomStore {
             challengeMeta: room.round.challenge.meta,
             startedAt: room.round.startedAt,
             endsAt: room.round.endsAt,
+            hasRoundTimer: room.round.hasRoundTimer,
+            isSuddenDeath: room.round.isSuddenDeath,
             answeringPlayerId:
               room.phase === "round-active" ? room.round.answeringPlayerId ?? undefined : undefined,
             answerWindowEndsAt:
@@ -1128,6 +1463,7 @@ export class RoomStore {
                   playerId: player.id,
                   hasSubmitted: false,
                   attemptCount: attempts.length,
+                  scoreDelta: latestAttempt?.scoreDelta ?? 0,
                   lastSubmissionKind: latestAttempt?.kind,
                   lastSubmissionText: latestAttempt?.answer,
                   lastSubmittedAt: latestAttempt?.submittedAt,
@@ -1141,6 +1477,7 @@ export class RoomStore {
                   playerId: player.id,
                   hasSubmitted: true,
                   attemptCount: attempts.length,
+                  scoreDelta: submission.pointsAwarded,
                   lastSubmissionKind: "correct",
                   lastSubmittedAt: submission.submittedAt,
                   isAnswering: room.round?.answeringPlayerId === player.id
@@ -1154,6 +1491,7 @@ export class RoomStore {
                 answer: submission.answer,
                 submittedAt: submission.submittedAt,
                 pointsAwarded: submission.pointsAwarded,
+                scoreDelta: submission.pointsAwarded,
                 rank: submission.rank,
                 attemptCount: attempts.length,
                 lastSubmissionKind: "correct",
@@ -1166,8 +1504,9 @@ export class RoomStore {
         : null,
       completedRounds: room.completedRounds,
       finalWinnerIds: room.finalWinnerIds,
-      activityFeed: room.activityFeed,
+      chatFeed: room.chatFeed,
       matchStartedAt: room.matchStartedAt,
+      matchEndsAt: room.matchEndsAt,
       totalMatchDurationMs: room.completedRoundDurationsMs.reduce((total, value) => total + value, 0),
       averageRoundDurationMs:
         room.completedRoundDurationsMs.length === 0
@@ -1210,6 +1549,28 @@ export class RoomStore {
     room.transitionTimer = null;
   }
 
+  private scheduleMatchCapTimer(room: RoomRecord) {
+    this.clearMatchCapTimer(room);
+
+    if (!room.matchEndsAt) {
+      return;
+    }
+
+    const remainingMs = Math.max(0, room.matchEndsAt - Date.now());
+    room.matchCapTimer = setTimeout(() => {
+      this.forceFinishMatch(room.roomId);
+    }, remainingMs);
+  }
+
+  private clearMatchCapTimer(room: RoomRecord) {
+    if (!room.matchCapTimer) {
+      return;
+    }
+
+    clearTimeout(room.matchCapTimer);
+    room.matchCapTimer = null;
+  }
+
   private scheduleCleanup(room: RoomRecord) {
     if (room.cleanupTimer) {
       return;
@@ -1222,7 +1583,10 @@ export class RoomStore {
         return;
       }
 
-      if (latestRoom.players.some((player) => player.connected)) {
+      if (
+        latestRoom.players.some((player) => player.connected) ||
+        latestRoom.spectators.some((spectator) => spectator.connected)
+      ) {
         latestRoom.cleanupTimer = null;
         return;
       }
@@ -1230,6 +1594,7 @@ export class RoomStore {
       this.clearRoundTimer(latestRoom);
       this.clearTransitionTimer(latestRoom);
       this.clearAnswerWindowTimer(latestRoom);
+      this.clearMatchCapTimer(latestRoom);
       this.rooms.delete(latestRoom.roomId);
     }, ROOM_IDLE_GRACE_MS);
   }
@@ -1263,9 +1628,10 @@ export class RoomStore {
     room.completedRounds = 0;
     room.finalWinnerIds = [];
     room.matchStartedAt = undefined;
+    room.matchEndsAt = undefined;
     room.autoResetAt = undefined;
     room.completedRoundDurationsMs = [];
-    room.activityFeed = [];
+    this.clearMatchCapTimer(room);
     this.resetRoomScores(room);
     room.message = "Back in the lobby. Tweak the settings or start another match.";
     room.messageKey = "reset-lobby";
@@ -1280,9 +1646,11 @@ function areLobbySettingsEqual(left: LobbySettings, right: LobbySettings) {
     left.roundCount === right.roundCount &&
     left.roundTimeSec === right.roundTimeSec &&
     left.binaryDecimalToBinaryChance === right.binaryDecimalToBinaryChance &&
+    left.binaryLivePreview === right.binaryLivePreview &&
     left.factorResolutionMode === right.factorResolutionMode &&
     left.factorPrimeAnswerMode === right.factorPrimeAnswerMode &&
     left.factorOrderedAnswer === right.factorOrderedAnswer &&
-    left.factorSingleAttempt === right.factorSingleAttempt
+    left.factorSingleAttempt === right.factorSingleAttempt &&
+    left.factorSuddenDeath === right.factorSuddenDeath
   );
 }

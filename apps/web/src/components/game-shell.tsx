@@ -24,19 +24,28 @@ import {
   type SetStateAction
 } from "react";
 import { useRouter } from "next/navigation";
+import { BlockMath } from "react-katex";
 import { io, type Socket } from "socket.io-client";
 import {
   DEFAULT_LOBBY_SETTINGS,
+  GOLDEN_BELL_PENALTY_POINTS,
+  MAX_PLAYERS_PER_ROOM,
+  SCORE_BASE_POINTS_BY_RANK,
+  SCORE_FALLBACK_POINTS,
+  SCORE_SPEED_BONUS_PER_SECOND,
   clampSettings,
   createInvitePath,
+  getBinaryPreviewValue,
   sanitizeRoomId,
   sortPlayersByScore,
+  type BinaryChallengeMeta,
   type FactorResolutionMode,
   type GameMode,
   type JoinRoomResult,
   type LobbySettings,
   type PlayerRoundStatus,
   type PrimeFactorChallengeMeta,
+  type RoomRole,
   type RoomSnapshot,
   type SocketAck,
   type SubmitAnswerResult
@@ -47,6 +56,7 @@ import {
   getCopy,
   getDefaultLocale,
   getFactorResolutionSummary,
+  getModeDescriptionByLocale,
   getModeLabelByLocale,
   getRoomMessageByLocale,
   type Locale
@@ -65,10 +75,10 @@ type BusyState =
   | null;
 
 type ThemeMode = "light" | "dark";
-
 const DISPLAY_NAME_KEY = "factorrush:last-name";
 const ROOM_SESSION_PREFIX = "factorrush:room:";
 const LOCALE_STORAGE_KEY = "factorrush:locale";
+const MAX_VISIBLE_CHAT_MESSAGES = 10;
 const THEME_STORAGE_KEY = "factorrush:theme";
 let sharedSocket: Socket | null = null;
 let latestSharedRoomState: RoomSnapshot | null = null;
@@ -81,12 +91,8 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const router = useRouter();
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
-  const [displayName, setDisplayName] = useState(
-    () =>
-      typeof window !== "undefined"
-        ? window.localStorage.getItem(DISPLAY_NAME_KEY) ?? ""
-        : ""
-  );
+  const [memberRole, setMemberRole] = useState<RoomRole | null>(null);
+  const [displayName, setDisplayName] = useState("");
   const [roomCode, setRoomCode] = useState(initialRoomId ?? "");
   const [createMode, setCreateMode] = useState<GameMode>("factor");
   const [settingsDraft, setSettingsDraft] = useState<LobbySettings>(DEFAULT_LOBBY_SETTINGS);
@@ -94,23 +100,10 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const [feedback, setFeedback] = useState("");
   const [busyState, setBusyState] = useState<BusyState>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const [locale, setLocale] = useState<Locale>(() => {
-    if (typeof window === "undefined") {
-      return "ko";
-    }
-
-    const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
-    return savedLocale === "en" || savedLocale === "ko" ? savedLocale : getDefaultLocale();
-  });
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    if (typeof window === "undefined") {
-      return "light";
-    }
-
-    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-    return savedTheme === "dark" ? "dark" : "light";
-  });
+  const [now, setNow] = useState(0);
+  const [locale, setLocale] = useState<Locale>("ko");
+  const [theme, setTheme] = useState<ThemeMode>("light");
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const attemptedReconnectRef = useRef<string | null>(null);
   const lastInviteFallbackRef = useRef<string>("");
@@ -194,6 +187,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     const savedSession = readRoomSession(sessionRoomId);
     if (savedSession) {
       setPlayerId(savedSession.playerId);
+      setMemberRole(savedSession.role ?? null);
     }
   }, [initialRoomId, playerId, room?.roomId]);
 
@@ -221,13 +215,70 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   }, [settingsDraft]);
 
   useEffect(() => {
-    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
-  }, [locale]);
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const savedLocale = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    const nextLocale = savedLocale === "en" || savedLocale === "ko" ? savedLocale : getDefaultLocale();
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    const nextTheme = savedTheme === "dark" ? "dark" : "light";
+    const savedDisplayName = window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "";
+
+    setDisplayName(savedDisplayName);
+    setLocale(nextLocale);
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    setPreferencesLoaded(true);
+  }, []);
 
   useEffect(() => {
+    setNow(Date.now());
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !preferencesLoaded) {
+      return;
+    }
+
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+  }, [locale, preferencesLoaded]);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      document.documentElement.dataset.theme = theme;
+    }
+
+    if (typeof window === "undefined" || !preferencesLoaded) {
+      return;
+    }
+
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+  }, [preferencesLoaded, theme]);
+
+  useEffect(() => {
+    if (!room || !playerId || typeof window === "undefined") {
+      return;
+    }
+
+    const currentMember =
+      room.players.find((candidate) => candidate.id === playerId) ??
+      room.spectators.find((candidate) => candidate.id === playerId);
+    if (!currentMember) {
+      return;
+    }
+
+    if (displayName !== currentMember.name) {
+      setDisplayName(currentMember.name);
+    }
+
+    const resolvedRole: RoomRole = room.players.some((candidate) => candidate.id === playerId)
+      ? "player"
+      : "spectator";
+    setMemberRole(resolvedRole);
+    window.localStorage.setItem(DISPLAY_NAME_KEY, currentMember.name);
+    writeRoomSession(room.roomId, playerId, currentMember.name, resolvedRole);
+  }, [displayName, playerId, room]);
 
   useEffect(() => {
     if (
@@ -300,6 +351,14 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       return;
     }
 
+    const isLocalHost =
+      room.messageKey === "settings-updated" || room.messageKey === "settings-updated-reset-ready"
+        ? room.players.some((candidate) => candidate.id === playerId && candidate.isHost)
+        : true;
+    if (!isLocalHost) {
+      return;
+    }
+
     const resolvedMessageKey =
       room.messageKey === "settings-updated" &&
       previousReadyCount != null &&
@@ -314,7 +373,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
     lastRoomToastRef.current = toastKey;
     setFeedback(getRoomMessageByLocale(locale, resolvedMessageKey, room.messagePlayerName));
-  }, [locale, room]);
+  }, [locale, playerId, room]);
 
   useEffect(() => {
     if (!initialRoomId || room || !isConnected) {
@@ -337,12 +396,13 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     void emitWithAck<JoinRoomResult>("room:join", {
       roomId: initialRoomId,
       playerName: savedSession.name,
-      reconnectPlayerId: savedSession.playerId
+      reconnectMemberId: savedSession.playerId
     })
       .then((result) => {
         setPlayerId(result.playerId);
-        writeRoomSession(result.roomId, result.playerId, savedSession.name);
-        setFeedback(copy.reconnectSuccess);
+        setMemberRole(result.role);
+        writeRoomSession(result.roomId, result.playerId, savedSession.name, result.role);
+        setFeedback(result.role === "spectator" ? copy.spectatorReconnectSuccess : copy.reconnectSuccess);
       })
       .catch(() => {
         clearRoomSession(initialRoomId);
@@ -355,22 +415,25 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   const sortedPlayers = room ? sortPlayersByScore(room.players) : [];
   const currentPlayer = room?.players.find((candidate) => candidate.id === playerId) ?? null;
+  const currentSpectator = room?.spectators.find((candidate) => candidate.id === playerId) ?? null;
   const myRoundStatus =
     room?.round?.playerStatuses.find((candidate) => candidate.playerId === playerId) ?? null;
+  const isSpectator = currentSpectator != null || memberRole === "spectator";
   const isHost = currentPlayer?.isHost ?? false;
   const browserOrigin =
     typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:3000";
   const inviteUrl = activeRoomId
     ? new URL(createInvitePath(activeRoomId), browserOrigin).toString()
     : "";
-  const roundDuration = room?.round ? room.round.endsAt - room.round.startedAt : 0;
-  const roundRemainingMs = room?.round ? Math.max(0, room.round.endsAt - now) : 0;
+  const roundHasTimer = room?.round?.hasRoundTimer ?? false;
+  const roundDuration = room?.round && roundHasTimer ? room.round.endsAt - room.round.startedAt : 0;
+  const roundRemainingMs = room?.round && roundHasTimer ? Math.max(0, room.round.endsAt - now) : 0;
   const roundRemainingSeconds = Math.ceil(roundRemainingMs / 1000);
   const progressRatio =
     room?.round && roundDuration > 0 ? Math.max(0, Math.min(1, roundRemainingMs / roundDuration)) : 0;
 
   useEffect(() => {
-    if (room?.phase !== "round-active" || myRoundStatus?.hasSubmitted) {
+    if (room?.phase !== "round-active" || myRoundStatus?.hasSubmitted || isSpectator) {
       return;
     }
 
@@ -382,7 +445,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [myRoundStatus?.hasSubmitted, room?.phase, room?.round?.roundNumber]);
+  }, [isSpectator, myRoundStatus?.hasSubmitted, room?.phase, room?.round?.roundNumber]);
 
   useEffect(() => {
     const handleGlobalEnterFocus = (event: KeyboardEvent) => {
@@ -402,7 +465,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       }
 
       const nextTarget =
-        room?.phase === "round-active" && !myRoundStatus?.hasSubmitted
+        room?.phase === "round-active" && !myRoundStatus?.hasSubmitted && !isSpectator
           ? answerInputRef.current
           : initialRoomId || roomCode
             ? !displayName.trim()
@@ -423,7 +486,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     return () => {
       window.removeEventListener("keydown", handleGlobalEnterFocus);
     };
-  }, [displayName, initialRoomId, myRoundStatus?.hasSubmitted, room?.phase, roomCode]);
+  }, [displayName, initialRoomId, isSpectator, myRoundStatus?.hasSubmitted, room?.phase, roomCode]);
 
   const navigateToRoom = (roomId: string) => {
     router.push(createInvitePath(roomId));
@@ -445,8 +508,9 @@ export function GameShell({ initialRoomId }: GameShellProps) {
         settings: { mode: createMode }
       });
       window.localStorage.setItem(DISPLAY_NAME_KEY, playerName);
-      writeRoomSession(result.roomId, result.playerId, playerName);
+      writeRoomSession(result.roomId, result.playerId, playerName, result.role);
       setPlayerId(result.playerId);
+      setMemberRole(result.role);
       setRoomCode(result.roomId);
       navigateToRoom(result.roomId);
     } catch (error) {
@@ -478,11 +542,13 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       const result = await emitWithAck<JoinRoomResult>("room:join", {
         roomId: normalizedRoomId,
         playerName,
-        reconnectPlayerId: savedSession?.playerId
+        reconnectMemberId: savedSession?.playerId
       });
       window.localStorage.setItem(DISPLAY_NAME_KEY, playerName);
-      writeRoomSession(result.roomId, result.playerId, playerName);
+      writeRoomSession(result.roomId, result.playerId, playerName, result.role);
       setPlayerId(result.playerId);
+      setMemberRole(result.role);
+      setFeedback(result.role === "spectator" ? copy.spectatorJoinSuccess : "");
       navigateToRoom(result.roomId);
     } catch (error) {
       setFeedback(getErrorMessage(error, locale));
@@ -576,14 +642,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       return;
     }
 
+    const submittedAnswer = answerDraft;
+    setAnswerDraft("");
     setBusyState("submit");
 
     try {
       const result = await emitWithAck<SubmitAnswerResult>("round:submit-answer", {
         roomId: room.roomId,
-        answer: answerDraft
+        answer: submittedAnswer
       });
-      setAnswerDraft("");
 
       if (result.isCorrect) {
         setFeedback(copy.answerAccepted);
@@ -665,6 +732,39 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
   };
 
+  const handleRenamePlayer = async (playerName: string) => {
+    if (!room) {
+      return;
+    }
+
+    try {
+      await emitWithAck<null>("room:rename-player", {
+        roomId: room.roomId,
+        playerName
+      });
+    } catch (error) {
+      setFeedback(getErrorMessage(error, locale));
+    }
+  };
+
+  const handleBecomePlayer = async () => {
+    if (!room) {
+      return;
+    }
+
+    try {
+      const result = await emitWithAck<JoinRoomResult>("room:become-player", {
+        roomId: room.roomId
+      });
+      setPlayerId(result.playerId);
+      setMemberRole(result.role);
+      writeRoomSession(result.roomId, result.playerId, displayName || currentSpectator?.name || "", result.role);
+      setFeedback(copy.spectatorSeatJoined);
+    } catch (error) {
+      setFeedback(getErrorMessage(error, locale));
+    }
+  };
+
   const handleSetReady = async (isReady: boolean) => {
     if (!room) {
       return;
@@ -695,6 +795,23 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
   };
 
+  const handleSendChat = async (text: string) => {
+    if (!room) {
+      return false;
+    }
+
+    try {
+      await emitWithAck<null>("room:send-chat", {
+        roomId: room.roomId,
+        text
+      });
+      return true;
+    } catch (error) {
+      setFeedback(getErrorMessage(error, locale));
+      return false;
+    }
+  };
+
   return (
     <div className={styles.shell}>
       <div className={styles.noise} />
@@ -718,42 +835,50 @@ export function GameShell({ initialRoomId }: GameShellProps) {
           </div>
 
           <div className={styles.headerTools}>
-            <div className={styles.languageSwitch} aria-label={copy.languageLabel}>
-              <button
-                className={styles.languageButton}
-                data-active={locale === "ko"}
-                onClick={() => setLocale("ko")}
-                type="button"
-              >
-                KO
-              </button>
-              <button
-                className={styles.languageButton}
-                data-active={locale === "en"}
-                onClick={() => setLocale("en")}
-                type="button"
-              >
-                EN
-              </button>
-            </div>
+            <div className={styles.switchRow}>
+              <div className={styles.languageSwitch} aria-label={copy.languageLabel}>
+                <button
+                  className={styles.languageButton}
+                  data-active={locale === "ko"}
+                  onClick={() => setLocale("ko")}
+                  type="button"
+                >
+                  KO
+                </button>
+                <button
+                  className={styles.languageButton}
+                  data-active={locale === "en"}
+                  onClick={() => setLocale("en")}
+                  type="button"
+                >
+                  EN
+                </button>
+              </div>
 
-            <div className={styles.languageSwitch} aria-label={copy.themeLabel}>
-              <button
-                className={styles.languageButton}
-                data-active={theme === "light"}
-                onClick={() => setTheme("light")}
-                type="button"
-              >
-                {copy.themeLight}
-              </button>
-              <button
-                className={styles.languageButton}
-                data-active={theme === "dark"}
-                onClick={() => setTheme("dark")}
-                type="button"
-              >
-                {copy.themeDark}
-              </button>
+              <div className={styles.languageSwitch} aria-label={copy.themeLabel}>
+                <button
+                  className={styles.languageButton}
+                  aria-label={copy.themeLight}
+                  data-active={theme === "light"}
+                  data-icon="true"
+                  onClick={() => setTheme("light")}
+                  title={copy.themeLight}
+                  type="button"
+                >
+                  <ThemeModeIcon mode="light" />
+                </button>
+                <button
+                  className={styles.languageButton}
+                  aria-label={copy.themeDark}
+                  data-active={theme === "dark"}
+                  data-icon="true"
+                  onClick={() => setTheme("dark")}
+                  title={copy.themeDark}
+                  type="button"
+                >
+                  <ThemeModeIcon mode="dark" />
+                </button>
+              </div>
             </div>
 
             {showAmbientInfo ? (
@@ -769,6 +894,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             room={room}
             locale={locale}
             playerId={playerId}
+            memberRole={memberRole}
             isHost={isHost}
             myRoundStatus={myRoundStatus}
             inviteUrl={inviteUrl}
@@ -784,12 +910,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             onCopyInvite={handleCopyInvite}
             onSettingsDraftChange={handleSettingsDraftChange}
             onRenameRoom={handleRenameRoom}
+            onRenamePlayer={handleRenamePlayer}
+            onBecomePlayer={handleBecomePlayer}
             onSetReady={handleSetReady}
             onTransferHost={handleTransferHost}
             onStartGame={handleStartGame}
             onAdvanceRound={handleAdvanceRound}
             onResetRoom={handleResetRoom}
             onClaimAnswerTurn={handleClaimAnswerTurn}
+            onSendChat={handleSendChat}
             onAnswerDraftChange={setAnswerDraft}
             onSubmitAnswer={handleSubmitAnswer}
           />
@@ -893,17 +1022,26 @@ function LandingExperience({
             />
           </label>
 
-          <label className={styles.field}>
+          <div className={styles.field}>
             <span>{copy.startModeLabel}</span>
-            <select
-              data-testid="create-mode-select"
-              value={createMode}
-              onChange={(event) => setCreateMode(event.target.value as GameMode)}
-            >
-              <option value="factor">{getModeLabelByLocale(locale, "factor")}</option>
-              <option value="binary">{getModeLabelByLocale(locale, "binary")}</option>
-            </select>
-          </label>
+            <div className={styles.modeChoiceRow} data-columns="2">
+              {(["factor", "binary"] as const).map((modeValue) => (
+                <button
+                  className={styles.modeChoiceButton}
+                  data-active={createMode === modeValue}
+                  data-testid={`create-mode-${modeValue}`}
+                  key={modeValue}
+                  onClick={() => setCreateMode(modeValue)}
+                  type="button"
+                >
+                  {getModeLabelByLocale(locale, modeValue)}
+                </button>
+              ))}
+            </div>
+            <small className={styles.fieldNote}>
+              {getModeDescriptionByLocale(locale, createMode)}
+            </small>
+          </div>
 
           <button
             className={styles.primaryAction}
@@ -1018,6 +1156,7 @@ interface RoomExperienceProps {
   room: RoomSnapshot;
   locale: Locale;
   playerId: string | null;
+  memberRole: RoomRole | null;
   isHost: boolean;
   myRoundStatus: PlayerRoundStatus | null;
   inviteUrl: string;
@@ -1033,12 +1172,15 @@ interface RoomExperienceProps {
   onCopyInvite: () => void;
   onSettingsDraftChange: Dispatch<SetStateAction<LobbySettings>>;
   onRenameRoom: (roomName: string) => void;
+  onRenamePlayer: (playerName: string) => void;
+  onBecomePlayer: () => void;
   onSetReady: (isReady: boolean) => void;
   onTransferHost: (playerId: string) => void;
   onStartGame: () => void;
   onAdvanceRound: () => void;
   onResetRoom: () => void;
   onClaimAnswerTurn: () => void;
+  onSendChat: (text: string) => Promise<boolean>;
   onAnswerDraftChange: (value: string) => void;
   onSubmitAnswer: (event: FormEvent<HTMLFormElement>) => void;
 }
@@ -1047,6 +1189,7 @@ function RoomExperience({
   room,
   locale,
   playerId,
+  memberRole,
   isHost,
   myRoundStatus,
   inviteUrl,
@@ -1062,25 +1205,44 @@ function RoomExperience({
   onCopyInvite,
   onSettingsDraftChange,
   onRenameRoom,
+  onRenamePlayer,
+  onBecomePlayer,
   onSetReady,
   onTransferHost,
   onStartGame,
   onAdvanceRound,
   onResetRoom,
   onClaimAnswerTurn,
+  onSendChat,
   onAnswerDraftChange,
   onSubmitAnswer
 }: RoomExperienceProps) {
   const copy = getCopy(locale);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
-  const [isFeedOpen, setIsFeedOpen] = useState(false);
+  const [isScoreGuideOpen, setIsScoreGuideOpen] = useState(false);
+  const [chatDraft, setChatDraft] = useState("");
+  const [isSendingChat, setIsSendingChat] = useState(false);
   const [isRenamingRoom, setIsRenamingRoom] = useState(false);
+  const [isRenamingPlayer, setIsRenamingPlayer] = useState(false);
   const [roomNameDraft, setRoomNameDraft] = useState(room.roomName);
+  const [playerNameDraft, setPlayerNameDraft] = useState(
+    room.players.find((candidate) => candidate.id === playerId)?.name ??
+      room.spectators.find((candidate) => candidate.id === playerId)?.name ??
+      ""
+  );
   const roomNameInputRef = useRef<HTMLInputElement | null>(null);
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
+  const lobbyChatInputRef = useRef<HTMLInputElement | null>(null);
+  const chatListRef = useRef<HTMLDivElement | null>(null);
+  const lobbyChatListRef = useRef<HTMLDivElement | null>(null);
+  const playerNameInputRef = useRef<HTMLInputElement | null>(null);
   const roundCopy = room.round ? getChallengeCopy(locale, room.round) : null;
   const statusMessage = getRoomMessageByLocale(locale, room.messageKey, room.messagePlayerName);
   const currentPlayer = room.players.find((candidate) => candidate.id === playerId) ?? null;
+  const currentSpectator = room.spectators.find((candidate) => candidate.id === playerId) ?? null;
+  const currentMember = currentPlayer ?? currentSpectator;
+  const isSpectator = currentPlayer == null && (currentSpectator != null || memberRole === "spectator");
   const submittedCount =
     room.round?.playerStatuses.filter((candidate) => candidate.hasSubmitted).length ?? 0;
   const winnerNames = room.finalWinnerIds
@@ -1094,6 +1256,7 @@ function RoomExperience({
       : null;
   const connectedPlayers = room.players.filter((candidate) => candidate.connected);
   const connectedGuests = connectedPlayers.filter((candidate) => !candidate.isHost);
+  const connectedSpectators = room.spectators.filter((candidate) => candidate.connected);
   const readyCount = connectedGuests.filter((candidate) => candidate.isReady).length;
   const allReady = connectedGuests.length === 0 || readyCount === connectedGuests.length;
   const roundTransitionSeconds =
@@ -1112,6 +1275,14 @@ function RoomExperience({
     room.settings.mode === "factor"
       ? getFactorAnswerInlineHint(locale, room.round, room.settings)
       : null;
+  const binaryPreviewText =
+    room.phase === "round-active" &&
+    room.round?.mode === "binary" &&
+    room.settings.binaryLivePreview &&
+    !isSpectator &&
+    !myRoundStatus?.hasSubmitted
+      ? getBinaryPreviewText(locale, room.round.challengeMeta as BinaryChallengeMeta, answerDraft)
+      : null;
   const showChallengeHelper = room.settings.mode === "binary";
   const resultsAutoResetSeconds =
     room.autoResetAt != null ? Math.max(0, Math.ceil((room.autoResetAt - now) / 1000)) : 0;
@@ -1119,10 +1290,21 @@ function RoomExperience({
     room.settings.mode === "factor"
       ? getFactorResolutionSummary(locale, room.settings.factorResolutionMode)
       : null;
+  const roundTimeSummary = getRoundTimeSummary(locale, room.settings);
+  const settingsTimeSummary = getRoundTimeSummary(locale, settingsDraft);
+  const isGoldenBellSettings =
+    settingsDraft.mode === "factor" && settingsDraft.factorResolutionMode === "golden-bell";
+  const visibleChatFeed = room.chatFeed.slice(-MAX_VISIBLE_CHAT_MESSAGES);
+  const recentChatByPlayer = getRecentChatByPlayer(room.chatFeed, now);
   const isGoldenBellRound =
     room.phase === "round-active" &&
     room.round?.mode === "factor" &&
     room.settings.factorResolutionMode === "golden-bell";
+  const roundModeBadge = room.round?.isSuddenDeath
+    ? copy.suddenDeathLive
+    : isGoldenBellRound
+      ? copy.goldenBellLive
+      : null;
   const answeringPlayer =
     room.round?.answeringPlayerId != null
       ? room.players.find((candidate) => candidate.id === room.round?.answeringPlayerId) ?? null
@@ -1132,17 +1314,67 @@ function RoomExperience({
     room.round?.answerWindowEndsAt != null
       ? Math.max(0, Math.ceil((room.round.answerWindowEndsAt - now) / 1000))
       : 0;
+  const roundDeltaRows =
+    room.phase === "round-ended" && room.round
+      ? room.round.playerStatuses
+          .map((status) => {
+            const candidate = room.players.find((player) => player.id === status.playerId);
+            if (!candidate) {
+              return null;
+            }
+
+            return {
+              playerId: candidate.id,
+              name: candidate.name,
+              totalScore: candidate.score,
+              delta: status.scoreDelta ?? status.pointsAwarded ?? 0,
+              statusLabel: getRevealStatusLabel(locale, status),
+              isCorrect: status.hasSubmitted
+            };
+          })
+          .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+          .sort((left, right) => {
+            if (right.delta !== left.delta) {
+              return right.delta - left.delta;
+            }
+
+            if (right.totalScore !== left.totalScore) {
+              return right.totalScore - left.totalScore;
+            }
+
+            return left.name.localeCompare(right.name);
+          })
+      : [];
+  const correctPlayers = roundDeltaRows.filter((entry) => entry.isCorrect);
+  const revealSummary = getRevealSummary(locale, room, correctPlayers);
+  const revealDeltaRange = getRevealDeltaRange(locale, roundDeltaRows);
 
   useEffect(() => {
     if (room.phase !== "lobby") {
       setIsSettingsOpen(false);
+      setIsScoreGuideOpen(false);
       setIsRenamingRoom(false);
+      setIsRenamingPlayer(false);
     }
   }, [room.phase]);
 
   useEffect(() => {
+    if (overlayActive) {
+      setIsScoreGuideOpen(false);
+    }
+  }, [overlayActive]);
+
+  useEffect(() => {
+    setChatDraft("");
+  }, [room.roomId]);
+
+  useEffect(() => {
     setRoomNameDraft(room.roomName);
   }, [room.roomName]);
+
+  useEffect(() => {
+    setPlayerNameDraft(currentMember?.name ?? "");
+  }, [currentMember?.name]);
 
   useEffect(() => {
     if (!isRenamingRoom) {
@@ -1160,11 +1392,42 @@ function RoomExperience({
   }, [isRenamingRoom]);
 
   useEffect(() => {
+    if (!isRenamingPlayer) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      playerNameInputRef.current?.focus();
+      playerNameInputRef.current?.select();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isRenamingPlayer]);
+
+  useEffect(() => {
+    if (room.phase === "lobby" || !chatListRef.current) {
+      return;
+    }
+
+    chatListRef.current.scrollTop = chatListRef.current.scrollHeight;
+  }, [room.chatFeed, room.phase]);
+
+  useEffect(() => {
+    if (room.phase !== "lobby" || !lobbyChatListRef.current) {
+      return;
+    }
+
+    lobbyChatListRef.current.scrollTop = lobbyChatListRef.current.scrollHeight;
+  }, [room.chatFeed, room.phase]);
+
+  useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsSettingsOpen(false);
         setIsRulesOpen(false);
-        setIsFeedOpen(false);
+        setIsScoreGuideOpen(false);
         setIsRenamingRoom(false);
         return;
       }
@@ -1184,7 +1447,12 @@ function RoomExperience({
       }
 
       event.preventDefault();
-      setIsFeedOpen((current) => !current);
+      if (room.phase === "lobby") {
+        lobbyChatInputRef.current?.focus();
+        return;
+      }
+
+      chatInputRef.current?.focus();
     };
 
     window.addEventListener("keydown", handleEscape);
@@ -1192,6 +1460,21 @@ function RoomExperience({
       window.removeEventListener("keydown", handleEscape);
     };
   }, []);
+
+  const handleChatSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextMessage = chatDraft.trim();
+    if (!nextMessage) {
+      return;
+    }
+
+    setIsSendingChat(true);
+    const didSend = await onSendChat(nextMessage);
+    if (didSend) {
+      setChatDraft("");
+    }
+    setIsSendingChat(false);
+  };
 
   const handleRoomNameCommit = () => {
     setIsRenamingRoom(false);
@@ -1202,6 +1485,18 @@ function RoomExperience({
 
     if (roomNameDraft.trim() !== room.roomName) {
       onRenameRoom(roomNameDraft);
+    }
+  };
+
+  const handlePlayerNameCommit = () => {
+    setIsRenamingPlayer(false);
+    if (!playerNameDraft.trim()) {
+      setPlayerNameDraft(currentMember?.name ?? "");
+      return;
+    }
+
+    if (playerNameDraft.trim() !== (currentMember?.name ?? "")) {
+      onRenamePlayer(playerNameDraft);
     }
   };
 
@@ -1263,23 +1558,6 @@ function RoomExperience({
         </section>
 
         <section className={styles.stageSurface}>
-          {room.round && room.phase === "round-active" ? (
-            <div className={styles.stageHeader}>
-              <div className={styles.timerCluster}>
-                <span>
-                  {roundRemainingSeconds}
-                  {locale === "ko" ? copy.secondsUnit : "s"}
-                </span>
-                <div className={styles.timerTrack}>
-                  <div
-                    className={styles.timerPulse}
-                    style={{ transform: `scaleX(${progressRatio})` }}
-                  />
-                </div>
-              </div>
-            </div>
-          ) : null}
-
           {room.phase === "lobby" ? (
             <div className={styles.lobbyDeck}>
               <div className={styles.lobbyLead}>
@@ -1291,7 +1569,7 @@ function RoomExperience({
                   </div>
 
                   <div className={styles.actionRow}>
-                    {!isHost ? (
+                    {!isHost && !isSpectator ? (
                       <button
                         className={currentPlayer?.isReady ? styles.primaryAction : styles.secondaryAction}
                         data-testid="ready-button"
@@ -1301,14 +1579,6 @@ function RoomExperience({
                         {getReadyButtonLabel(locale, currentPlayer?.isReady ?? false)}
                       </button>
                     ) : null}
-                    <button
-                      className={styles.secondaryAction}
-                      data-testid="rules-button"
-                      onClick={() => setIsRulesOpen(true)}
-                      type="button"
-                    >
-                      {locale === "ko" ? "룰 보기" : "Rules"}
-                    </button>
                     {isHost ? (
                       <>
                         <button
@@ -1330,6 +1600,19 @@ function RoomExperience({
                         </button>
                       </>
                     ) : null}
+                    {isSpectator ? (
+                      <button
+                        className={styles.secondaryAction}
+                        data-testid="become-player-button"
+                        disabled={room.players.length >= MAX_PLAYERS_PER_ROOM}
+                        onClick={onBecomePlayer}
+                        type="button"
+                      >
+                        {room.players.length >= MAX_PLAYERS_PER_ROOM
+                          ? copy.spectatorSeatFull
+                          : copy.spectatorSeatJoin}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1343,13 +1626,19 @@ function RoomExperience({
                     {room.players.length}
                     {locale === "ko" ? copy.playersUnit : ` ${copy.playersUnit}`}
                   </span>
+                  {connectedSpectators.length > 0 ? (
+                    <span>
+                      {locale === "ko"
+                        ? `${copy.spectatorsUnit} ${connectedSpectators.length}${copy.playersUnit}`
+                        : `${connectedSpectators.length} ${copy.spectatorsUnit}`}
+                    </span>
+                  ) : null}
                   <span>{getModeLabelByLocale(locale, room.settings.mode)}</span>
                   <span>
                     {room.settings.roundCount} {copy.roundsUnit}
                   </span>
                   <span>
-                    {room.settings.roundTimeSec}
-                    {locale === "ko" ? copy.secondsUnit : "s"}
+                    {roundTimeSummary}
                   </span>
                   {binaryRatioSummary ? <span>{binaryRatioSummary}</span> : null}
                   {factorResolutionSummary ? <span>{factorResolutionSummary}</span> : null}
@@ -1360,6 +1649,11 @@ function RoomExperience({
                   room.settings.factorResolutionMode !== "golden-bell" &&
                   room.settings.factorSingleAttempt ? (
                     <span>{locale === "ko" ? "1회 기회" : "single try"}</span>
+                  ) : null}
+                  {room.settings.mode === "factor" &&
+                  room.settings.factorResolutionMode === "all-play" &&
+                  room.settings.factorSuddenDeath ? (
+                    <span>{locale === "ko" ? "서든데스" : "sudden death"}</span>
                   ) : null}
                   {room.settings.mode === "factor" ? (
                     <span>
@@ -1385,24 +1679,43 @@ function RoomExperience({
                     key={candidate.id}
                   >
                     <span>{String(index + 1).padStart(2, "0")}</span>
-                    <strong>{candidate.name}</strong>
-                    <p>
-                      {formatPlayerMeta(
-                        locale,
-                        candidate.correctAnswers,
-                        candidate.isHost,
-                        !candidate.connected
-                      )}
-                    </p>
+                    {candidate.id === playerId && isRenamingPlayer ? (
+                      <form
+                        className={styles.playerNameForm}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          handlePlayerNameCommit();
+                        }}
+                      >
+                        <input
+                          ref={playerNameInputRef}
+                          className={styles.playerNameInput}
+                          data-testid="player-name-input"
+                          onBlur={handlePlayerNameCommit}
+                          onChange={(event) => setPlayerNameDraft(event.target.value)}
+                          value={playerNameDraft}
+                        />
+                      </form>
+                    ) : candidate.id === playerId ? (
+                      <button
+                        className={styles.playerNameButton}
+                        data-testid="player-name-button"
+                        onClick={() => setIsRenamingPlayer(true)}
+                        type="button"
+                      >
+                        {candidate.name}
+                      </button>
+                    ) : (
+                      <strong>{candidate.name}</strong>
+                    )}
+                    <p>{getLobbyPlayerNote(locale, candidate.isHost, candidate.connected, candidate.isReady)}</p>
                     <div className={styles.podScore}>
-                      <small className={candidate.isHost ? styles.hostBadge : undefined}>
-                        {candidate.isHost
-                          ? copy.hostSuffix
-                          : candidate.isReady
-                            ? getReadyBadge(locale)
-                            : getNotReadyBadge(locale)}
-                      </small>
-                      <strong>{candidate.score}</strong>
+                      {candidate.isHost ? (
+                        <small className={styles.hostBadge}>{copy.hostSuffix}</small>
+                      ) : (
+                        <small>{candidate.isReady ? getReadyBadge(locale) : getNotReadyBadge(locale)}</small>
+                      )}
+                      {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
                     </div>
                     {isHost && candidate.id !== playerId && candidate.connected ? (
                       <button
@@ -1417,9 +1730,64 @@ function RoomExperience({
                 ))}
               </div>
 
+              {room.spectators.length > 0 ? (
+                <div className={styles.spectatorStrip}>
+                  <div className={styles.railHeading}>
+                    <span>{copy.spectatorLabel}</span>
+                    <strong>{copy.spectatorTitle}</strong>
+                  </div>
+                  <div className={styles.spectatorList}>
+                    {room.spectators.map((candidate) => (
+                      candidate.id === playerId && isRenamingPlayer ? (
+                        <form
+                          className={styles.playerNameForm}
+                          key={candidate.id}
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            handlePlayerNameCommit();
+                          }}
+                        >
+                          <input
+                            ref={playerNameInputRef}
+                            className={styles.playerNameInput}
+                            data-testid="player-name-input"
+                            onBlur={handlePlayerNameCommit}
+                            onChange={(event) => setPlayerNameDraft(event.target.value)}
+                            value={playerNameDraft}
+                          />
+                        </form>
+                      ) : candidate.id === playerId ? (
+                        <button
+                          className={styles.spectatorChipButton}
+                          data-testid="player-name-button"
+                          key={candidate.id}
+                          onClick={() => setIsRenamingPlayer(true)}
+                          type="button"
+                        >
+                          {candidate.name}
+                        </button>
+                      ) : (
+                        <span
+                          className={styles.spectatorChip}
+                          data-me={candidate.id === playerId}
+                          data-offline={!candidate.connected}
+                          key={candidate.id}
+                        >
+                          {candidate.name}
+                        </span>
+                      )
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               <div className={styles.lobbyFoot}>
                 <p className={styles.compactHint}>
-                  {allReady
+                  {isSpectator
+                    ? locale === "ko"
+                      ? "지금은 관전 중입니다. 로비에서 좌석이 비면 플레이어로 참가할 수 있습니다."
+                      : "You are spectating right now. Take a player seat from the lobby when one is open."
+                    : allReady
                     ? locale === "ko"
                       ? "모두 준비됐습니다. 방장이 시작할 수 있습니다."
                       : "Everyone is ready. The host can start now."
@@ -1447,16 +1815,47 @@ function RoomExperience({
                 <p>{copy.resultsResetHint}</p>
               </div>
             </div>
-          ) : (
+              ) : (
             <div className={styles.roundGrid}>
               <div className={styles.challengePanel}>
-                <span className={styles.challengeLabel}>{copy.challengeLabel}</span>
-                <h4>{roundCopy?.prompt}</h4>
+                <div className={styles.challengePanelHeader}>
+                  <div className={styles.challengeCopyBlock}>
+                    <span className={styles.challengeLabel}>{copy.challengeLabel}</span>
+                    <h4>{roundCopy?.prompt}</h4>
+                  </div>
+                  {room.phase === "round-active" && room.round?.hasRoundTimer ? (
+                    <div className={`${styles.timerCluster} ${styles.challengeTimerCluster}`}>
+                      <span>
+                        {roundRemainingSeconds}
+                        {locale === "ko" ? copy.secondsUnit : "s"}
+                      </span>
+                      <div className={styles.timerTrack}>
+                        <div
+                          className={styles.timerPulse}
+                          style={{ transform: `scaleX(${progressRatio})` }}
+                        />
+                      </div>
+                    </div>
+                  ) : room.phase === "round-active" && roundModeBadge ? (
+                    <div className={`${styles.timerCluster} ${styles.challengeTimerCluster}`}>
+                      <span>{roundModeBadge}</span>
+                      <div className={styles.timerTrack}>
+                        <div className={styles.timerPulse} style={{ transform: "scaleX(1)" }} />
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 {showChallengeHelper ? <p>{roundCopy?.helper}</p> : null}
               </div>
 
               {room.phase === "round-active" ? (
-                myRoundStatus?.hasSubmitted ? (
+                isSpectator ? (
+                  <div className={styles.waitingPanel} data-testid="spectator-panel">
+                    <span className={styles.challengeLabel}>{copy.spectatorLabel}</span>
+                    <strong>{copy.spectatorLiveTitle}</strong>
+                    <p>{copy.spectatorLiveBody}</p>
+                  </div>
+                ) : myRoundStatus?.hasSubmitted ? (
                   <div className={styles.revealPanel} data-state="success" data-testid="success-panel">
                     <span className={styles.challengeLabel}>
                       {locale === "ko" ? "정답 입력 완료" : "Answer locked"}
@@ -1564,6 +1963,11 @@ function RoomExperience({
                         value={answerDraft}
                       />
                     </label>
+                    {binaryPreviewText ? (
+                      <small className={styles.answerPreview} data-testid="binary-preview">
+                        {copy.binaryPreviewLabel}: {binaryPreviewText}
+                      </small>
+                    ) : null}
                     {isGoldenBellRound && isMyAnswerTurn ? (
                       <small>
                         {copy.goldenBellAnswering}{" "}
@@ -1623,25 +2027,19 @@ function RoomExperience({
                 <span>{copy.inviteLineLabel}</span>
                 <strong>{copy.shareUrlLabel}</strong>
               </div>
-              <code className={styles.inviteCode} data-testid="invite-url">
-                {inviteUrl}
-              </code>
-              <div className={styles.actionRow}>
+              <div className={styles.inviteCodeRow}>
+                <code className={styles.inviteCode} data-testid="invite-url">
+                  {inviteUrl}
+                </code>
                 <button
-                  className={styles.secondaryAction}
+                  aria-label={copy.copyLink}
+                  className={styles.iconAction}
                   data-testid="copy-invite-button"
                   onClick={onCopyInvite}
+                  title={copy.copyLink}
                   type="button"
                 >
-                  {copy.copyLink}
-                </button>
-                <button
-                  className={styles.secondaryAction}
-                  data-testid="rail-rules-button"
-                  onClick={() => setIsRulesOpen(true)}
-                  type="button"
-                >
-                  {locale === "ko" ? "룰 보기" : "Rules"}
+                  <CopyLinkIcon />
                 </button>
               </div>
             </section>
@@ -1656,6 +2054,58 @@ function RoomExperience({
                   <li key={line}>{line}</li>
                 ))}
               </ul>
+              <div className={styles.railActionRow}>
+                <button
+                  className={styles.secondaryAction}
+                  data-testid="score-guide-button"
+                  onClick={() => setIsScoreGuideOpen(true)}
+                  type="button"
+                >
+                  {copy.scoreGuideOpen}
+                </button>
+              </div>
+            </section>
+
+            <section className={`${styles.railBlock} ${styles.lobbyChatBlock}`}>
+              <div className={styles.railHeading}>
+                <span>{copy.feedLabel}</span>
+                <strong>{copy.lobbyChatTitle}</strong>
+              </div>
+              <div
+                className={`${styles.chatList} ${styles.lobbyChatList}`}
+                data-testid="lobby-chat-list"
+                ref={lobbyChatListRef}
+              >
+                {visibleChatFeed.length === 0 ? (
+                  <p className={styles.railBody}>{copy.noChatYet}</p>
+                ) : (
+                  visibleChatFeed.map((entry) => (
+                    <div className={styles.lobbyChatLine} key={entry.id}>
+                      <strong>{entry.playerName}</strong>
+                      <span>{entry.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+                <input
+                  ref={lobbyChatInputRef}
+                  data-testid="chat-input"
+                  maxLength={180}
+                  onChange={(event) => setChatDraft(event.target.value)}
+                  placeholder={copy.chatPlaceholder}
+                  type="text"
+                  value={chatDraft}
+                />
+                <button
+                  className={styles.primaryAction}
+                  data-testid="chat-send-button"
+                  disabled={!chatDraft.trim() || isSendingChat}
+                  type="submit"
+                >
+                  {isSendingChat ? copy.sendingChat : copy.sendChat}
+                </button>
+              </form>
             </section>
           </>
         ) : room.phase === "finished" ? (
@@ -1689,63 +2139,137 @@ function RoomExperience({
             </section>
           </>
         ) : (
-          <section className={styles.railBlock}>
+          <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
             <div className={styles.railHeading}>
               <span>{copy.liveBoardLabel}</span>
               <strong>{copy.liveBoardTitle}</strong>
             </div>
             <p className={styles.railBody}>{copy.liveBoardBody}</p>
 
-            <div className={styles.leaderboard}>
-              {sortedPlayers.map((candidate, index) => {
-                const status = room.round?.playerStatuses.find(
-                  (entry) => entry.playerId === candidate.id
-                );
-                const state = getLeaderboardState(status);
+            <div className={styles.liveRailContent}>
+              <div className={styles.leaderboardSection}>
+                <div className={styles.leaderboard} data-testid="leaderboard">
+                  {sortedPlayers.map((candidate, index) => {
+                    const status = room.round?.playerStatuses.find(
+                      (entry) => entry.playerId === candidate.id
+                    );
+                    const state = getLeaderboardState(status);
 
-                return (
-                  <div
-                    className={styles.leaderRow}
-                    data-me={candidate.id === playerId}
-                    data-state={state}
-                    key={candidate.id}
-                  >
-                    <div className={styles.leaderRowMain}>
-                      <span>{String(index + 1).padStart(2, "0")}</span>
-                      <div>
-                        <h5>{candidate.name}</h5>
-                        <p>
-                          {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
-                          {getRoundBoardStatus(locale, status)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className={styles.leaderRowScore}>
-                      <strong>{candidate.score}</strong>
-                    </div>
+                    return (
+                      <div
+                        className={styles.leaderRow}
+                        data-me={candidate.id === playerId}
+                        data-state={state}
+                        key={candidate.id}
+                      >
+                        <div className={styles.leaderRowMain}>
+                          <span>{String(index + 1).padStart(2, "0")}</span>
+                          <div>
+                            <h5>{candidate.name}</h5>
+                            <p>
+                              {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
+                              {getRoundBoardStatus(locale, status)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className={styles.leaderRowScore}>
+                          <strong>{candidate.score}</strong>
+                        </div>
 
-                    {room.phase === "round-active" &&
-                    status?.lastSubmissionKind &&
-                    !status.hasSubmitted &&
-                    status.lastSubmissionText ? (
-                      <div className={styles.leaderBubble} data-kind={status.lastSubmissionKind}>
-                        {status.lastSubmissionText}
+                        {room.phase === "round-active" &&
+                        status?.lastSubmissionKind &&
+                        !status.hasSubmitted &&
+                        status.lastSubmissionText ? (
+                          <div className={styles.leaderBubble} data-kind={status.lastSubmissionKind}>
+                            {status.lastSubmissionText}
+                          </div>
+                        ) : room.phase === "round-active" && recentChatByPlayer.get(candidate.id) ? (
+                          <div className={styles.leaderBubble} data-kind="chat">
+                            {recentChatByPlayer.get(candidate.id)?.text}
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
+                    );
+                  })}
+                </div>
+
+                {room.spectators.length > 0 ? (
+                  <div className={styles.liveSpectatorPanel}>
+                    <div className={styles.railHeading}>
+                      <span>{copy.spectatorLabel}</span>
+                      <strong>{copy.spectatorTitle}</strong>
+                    </div>
+                    <div className={styles.spectatorList}>
+                      {room.spectators.map((candidate) => (
+                        <span
+                          className={styles.spectatorChip}
+                          data-me={candidate.id === playerId}
+                          data-offline={!candidate.connected}
+                          key={candidate.id}
+                        >
+                          {candidate.name}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-                );
-              })}
+                ) : null}
+              </div>
+
+              <section className={styles.liveChatDock} data-testid="chat-panel">
+                <div className={styles.railHeading}>
+                  <span>{copy.feedLabel}</span>
+                  <strong>{copy.feedTitle}</strong>
+                </div>
+                <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list" ref={chatListRef}>
+                  {visibleChatFeed.length === 0 ? (
+                    <p className={styles.railBody}>{copy.noChatYet}</p>
+                  ) : (
+                    visibleChatFeed.map((entry) => (
+                      <div className={styles.chatLine} key={entry.id}>
+                        <strong>{entry.playerName}</strong>
+                        <span>{entry.text}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+                  <input
+                    ref={chatInputRef}
+                    data-testid="chat-input"
+                    maxLength={180}
+                    onChange={(event) => setChatDraft(event.target.value)}
+                    placeholder={copy.chatPlaceholder}
+                    type="text"
+                    value={chatDraft}
+                  />
+                  <button
+                    className={styles.primaryAction}
+                    data-testid="chat-send-button"
+                    disabled={!chatDraft.trim() || isSendingChat}
+                    type="submit"
+                  >
+                    {isSendingChat ? copy.sendingChat : copy.sendChat}
+                  </button>
+                </form>
+                <p className={styles.compactHint}>{copy.feedHint}</p>
+              </section>
             </div>
 
             <div className={styles.railFoot}>
-              <button
-                className={styles.secondaryAction}
-                data-testid="activity-toggle-button"
-                onClick={() => setIsFeedOpen((current) => !current)}
-                type="button"
-              >
-                {locale === "ko" ? "활동 기록 /" : "Activity /"}
-              </button>
+              <div className={styles.actionRow}>
+                {isHost ? (
+                  <button
+                    className={styles.secondaryAction}
+                    data-testid="live-reset-button"
+                    disabled={busyState === "reset"}
+                    onClick={onResetRoom}
+                    type="button"
+                  >
+                    {busyState === "reset" ? copy.resettingLobby : copy.resetLobby}
+                  </button>
+                ) : null}
+              </div>
               <p className={styles.compactHint}>
                 {locale === "ko"
                   ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
@@ -1777,20 +2301,53 @@ function RoomExperience({
               <strong>{room.round.revealedAnswer ?? "-"}</strong>
             </div>
 
-            <div className={styles.overlayStatRow}>
-              <div className={styles.statusNode}>
+            <div className={`${styles.overlayStatRow} ${styles.overlayStatRowCompact}`}>
+              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
                 <span>{locale === "ko" ? "라운드" : "round"}</span>
                 <strong>
                   {room.round.roundNumber}/{room.settings.roundCount}
                 </strong>
               </div>
-              <div className={styles.statusNode}>
-                <span>{locale === "ko" ? "현재 1위" : "leader"}</span>
-                <strong>{sortedPlayers[0]?.name ?? "-"}</strong>
+              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
+                <span>{revealSummary.label}</span>
+                <strong>{revealSummary.value}</strong>
               </div>
-              <div className={styles.statusNode}>
-                <span>{locale === "ko" ? "점수" : "score"}</span>
-                <strong>{sortedPlayers[0]?.score ?? 0}</strong>
+              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
+                <span>{locale === "ko" ? "점수 변동" : "score swing"}</span>
+                <strong>{revealDeltaRange}</strong>
+              </div>
+            </div>
+
+            <div className={styles.revealDeltaBoard} data-testid="round-delta-board">
+              <div className={styles.revealDeltaHeader}>
+                <span>{locale === "ko" ? "이번 라운드 점수 변화" : "Round score changes"}</span>
+                <strong>
+                  {locale === "ko" ? "변동 폭 기준 정렬" : "Sorted by score swing"}
+                </strong>
+              </div>
+
+              <div className={styles.revealDeltaList}>
+                {roundDeltaRows.map((entry) => (
+                  <article
+                    className={styles.revealDeltaRow}
+                    data-tone={getScoreDeltaTone(entry.delta)}
+                    key={entry.playerId}
+                  >
+                    <div className={styles.revealDeltaPlayer}>
+                      <strong>{entry.name}</strong>
+                      <p>{entry.statusLabel}</p>
+                    </div>
+
+                    <div className={styles.revealDeltaTotal}>
+                      <span>{locale === "ko" ? "누적" : "total"}</span>
+                      <strong>{entry.totalScore}</strong>
+                    </div>
+
+                    <div className={styles.revealDeltaValue} data-tone={getScoreDeltaTone(entry.delta)}>
+                      {formatSignedScore(entry.delta)}
+                    </div>
+                  </article>
+                ))}
               </div>
             </div>
           </section>
@@ -1820,7 +2377,9 @@ function RoomExperience({
               </div>
               <div className={styles.statusNode}>
                 <span>{locale === "ko" ? "총 시간" : "total time"}</span>
-                <strong data-testid="results-total-time">{formatClock(matchElapsedMs, locale)}</strong>
+                <strong data-testid="results-total-time">
+                  {formatClock(room.totalMatchDurationMs, locale)}
+                </strong>
               </div>
             </div>
 
@@ -1869,14 +2428,16 @@ function RoomExperience({
                   ? `${resultsAutoResetSeconds}${copy.secondsUnit} 뒤 자동으로 로비로 이동합니다.`
                   : `Returning to the lobby automatically in ${resultsAutoResetSeconds}s.`}
               </p>
-              <button
-                className={styles.primaryAction}
-                disabled={busyState === "reset"}
-                onClick={onResetRoom}
-                type="button"
-              >
-                {busyState === "reset" ? copy.resettingLobby : copy.resultsReturnNow}
-              </button>
+              <div className={styles.actionRow}>
+                <button
+                  className={styles.primaryAction}
+                  disabled={busyState === "reset"}
+                  onClick={onResetRoom}
+                  type="button"
+                >
+                  {busyState === "reset" ? copy.resettingLobby : copy.resultsReturnNow}
+                </button>
+              </div>
             </div>
           </section>
         </div>
@@ -1906,177 +2467,241 @@ function RoomExperience({
               </button>
             </div>
 
-            <p className={styles.railBody}>
-              {locale === "ko"
-                ? "설정은 바꾸는 즉시 반영됩니다."
-                : "Changes are applied immediately."}
-            </p>
-
             <div className={styles.settingsColumn}>
-              <label className={styles.field}>
+              <div className={`${styles.field} ${styles.settingsFullWidth}`}>
                 <span>{copy.gameModeField}</span>
-                <select
-                  data-testid="settings-mode-select"
-                  value={settingsDraft.mode}
-                  onChange={(event) =>
-                    onSettingsDraftChange((current) => ({
-                      ...current,
-                      mode: event.target.value as GameMode
-                    }))
-                  }
-                >
-                  <option value="factor">{getModeLabelByLocale(locale, "factor")}</option>
-                  <option value="binary">{getModeLabelByLocale(locale, "binary")}</option>
-                </select>
-              </label>
-
-              <div className={`${styles.field} ${styles.rangeField}`}>
-                <div className={styles.fieldHead}>
-                  <span>{copy.roundCountField}</span>
-                  <strong className={styles.rangeValue}>
-                    {settingsDraft.roundCount} {copy.roundsUnit}
-                  </strong>
+                <div className={styles.modeChoiceRow} data-columns="2">
+                  {(["factor", "binary"] as const).map((modeValue) => (
+                    <button
+                      className={styles.modeChoiceButton}
+                      data-active={settingsDraft.mode === modeValue}
+                      data-testid={`settings-mode-${modeValue}`}
+                      key={modeValue}
+                      onClick={() =>
+                        onSettingsDraftChange((current) => ({
+                          ...current,
+                          mode: modeValue as GameMode
+                        }))
+                      }
+                      type="button"
+                    >
+                      {getModeLabelByLocale(locale, modeValue)}
+                    </button>
+                  ))}
                 </div>
-                <input
-                  className={styles.rangeInput}
-                  data-testid="round-count-range"
-                  type="range"
-                  min="3"
-                  max="50"
-                  step="1"
-                  value={settingsDraft.roundCount}
-                  onChange={(event) =>
-                    onSettingsDraftChange((current) => ({
-                      ...current,
-                      roundCount: Number(event.target.value)
-                    }))
-                  }
-                />
+                <small className={styles.fieldNote}>
+                  {getModeDescriptionByLocale(locale, settingsDraft.mode)}
+                </small>
               </div>
 
-              <div className={`${styles.field} ${styles.rangeField}`}>
-                <div className={styles.fieldHead}>
-                  <span>{copy.timeLimitField}</span>
-                  <strong className={styles.rangeValue}>
-                    {settingsDraft.roundTimeSec} {copy.secondsUnit}
-                  </strong>
-                </div>
-                <input
-                  className={styles.rangeInput}
-                  data-testid="time-limit-range"
-                  type="range"
-                  min="15"
-                  max="90"
-                  step="5"
-                  value={settingsDraft.roundTimeSec}
-                  onChange={(event) =>
-                    onSettingsDraftChange((current) => ({
-                      ...current,
-                      roundTimeSec: Number(event.target.value)
-                    }))
-                  }
-                />
-              </div>
-
-              {settingsDraft.mode === "binary" ? (
+              <div className={styles.settingsSplitGrid}>
                 <div className={`${styles.field} ${styles.rangeField}`}>
                   <div className={styles.fieldHead}>
-                    <span>{copy.binaryRatioField}</span>
+                    <span>{copy.roundCountField}</span>
                     <strong className={styles.rangeValue}>
-                      {getBinaryRatioSummary(locale, settingsDraft.binaryDecimalToBinaryChance)}
+                      {settingsDraft.roundCount} {copy.roundsUnit}
                     </strong>
                   </div>
                   <input
                     className={styles.rangeInput}
-                    data-testid="binary-ratio-range"
+                    data-testid="round-count-range"
                     type="range"
-                    min="0"
-                    max="100"
-                    step="10"
-                    value={settingsDraft.binaryDecimalToBinaryChance}
+                    min="3"
+                    max="50"
+                    step="1"
+                    value={settingsDraft.roundCount}
                     onChange={(event) =>
                       onSettingsDraftChange((current) => ({
                         ...current,
-                        binaryDecimalToBinaryChance: Number(event.target.value)
+                        roundCount: Number(event.target.value)
                       }))
                     }
                   />
-                  <small className={styles.fieldNote}>{copy.binaryRatioHint}</small>
                 </div>
-              ) : (
-                <>
-                  <label className={styles.field}>
-                    <span>{copy.factorResolutionField}</span>
-                    <select
-                      data-testid="factor-resolution-select"
-                      value={settingsDraft.factorResolutionMode}
-                      onChange={(event) =>
-                        onSettingsDraftChange((current) => ({
-                          ...current,
-                          factorResolutionMode: event.target.value as FactorResolutionMode
-                        }))
-                      }
-                    >
-                      <option value="all-play">{copy.factorResolutionAllPlay}</option>
-                      <option value="first-correct">{copy.factorResolutionFirstCorrect}</option>
-                      <option value="golden-bell">{copy.factorResolutionGoldenBell}</option>
-                    </select>
-                    <small className={styles.fieldNote}>{copy.factorResolutionHint}</small>
-                  </label>
 
-                  <label className={styles.field}>
-                    <span>{copy.factorPrimeAnswerField}</span>
-                    <select
-                      data-testid="factor-prime-answer-select"
-                      value={settingsDraft.factorPrimeAnswerMode}
-                      onChange={(event) =>
-                        onSettingsDraftChange((current) => ({
-                          ...current,
-                          factorPrimeAnswerMode: event.target.value === "number" ? "number" : "phrase"
-                        }))
-                      }
-                    >
-                      <option value="phrase">{copy.factorPrimeAnswerPhrase}</option>
-                      <option value="number">{copy.factorPrimeAnswerNumber}</option>
-                    </select>
-                    <small className={styles.fieldNote}>{copy.factorPrimeAnswerHint}</small>
-                  </label>
+                <div className={`${styles.field} ${styles.rangeField}`}>
+                  <div className={styles.fieldHead}>
+                    <span>{copy.timeLimitField}</span>
+                    <strong className={styles.rangeValue}>{settingsTimeSummary}</strong>
+                  </div>
+                  <input
+                    className={styles.rangeInput}
+                    data-testid="time-limit-range"
+                    disabled={isGoldenBellSettings}
+                    type="range"
+                    min="15"
+                    max="90"
+                    step="5"
+                    value={settingsDraft.roundTimeSec}
+                    onChange={(event) =>
+                      onSettingsDraftChange((current) => ({
+                        ...current,
+                        roundTimeSec: Number(event.target.value)
+                      }))
+                    }
+                  />
+                  {isGoldenBellSettings ? (
+                    <small className={styles.fieldNote}>{copy.goldenBellUntimedHint}</small>
+                  ) : null}
+                </div>
+              </div>
 
-                  <label className={styles.toggleField}>
+              {settingsDraft.mode === "binary" ? (
+                <div className={styles.settingsStack}>
+                  <div className={`${styles.field} ${styles.rangeField}`}>
+                    <div className={styles.fieldHead}>
+                      <span>{copy.binaryRatioField}</span>
+                      <strong className={styles.rangeValue}>
+                        {getBinaryRatioSummary(locale, settingsDraft.binaryDecimalToBinaryChance)}
+                      </strong>
+                    </div>
                     <input
-                      data-testid="factor-ordered-toggle"
-                      checked={settingsDraft.factorOrderedAnswer}
+                      className={styles.rangeInput}
+                      data-testid="binary-ratio-range"
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="10"
+                      value={settingsDraft.binaryDecimalToBinaryChance}
                       onChange={(event) =>
                         onSettingsDraftChange((current) => ({
                           ...current,
-                          factorOrderedAnswer: event.target.checked
+                          binaryDecimalToBinaryChance: Number(event.target.value)
+                        }))
+                      }
+                    />
+                    <small className={styles.fieldNote}>{copy.binaryRatioHint}</small>
+                  </div>
+
+                  <label className={styles.toggleCard}>
+                    <input
+                      data-testid="binary-preview-toggle"
+                      checked={settingsDraft.binaryLivePreview}
+                      onChange={(event) =>
+                        onSettingsDraftChange((current) => ({
+                          ...current,
+                          binaryLivePreview: event.target.checked
                         }))
                       }
                       type="checkbox"
                     />
                     <span>
-                      {locale === "ko" ? "하드 모드: 소수 순서를 그대로 맞추기" : "Hard mode: keep factor order"}
+                      <strong>{copy.binaryPreviewToggle}</strong>
+                      <small>{copy.binaryPreviewHint}</small>
                     </span>
                   </label>
+                </div>
+              ) : (
+                <>
+                  <div className={`${styles.field} ${styles.settingsFullWidth}`}>
+                    <span>{copy.factorResolutionField}</span>
+                    <div className={styles.modeChoiceRow}>
+                      {(
+                        [
+                          ["all-play", copy.factorResolutionAllPlay],
+                          ["first-correct", copy.factorResolutionFirstCorrect],
+                          ["golden-bell", copy.factorResolutionGoldenBell]
+                        ] as const
+                      ).map(([modeValue, label]) => (
+                        <button
+                          className={styles.modeChoiceButton}
+                          data-active={settingsDraft.factorResolutionMode === modeValue}
+                          data-testid={`factor-resolution-${modeValue}`}
+                          key={modeValue}
+                          onClick={() =>
+                            onSettingsDraftChange((current) => ({
+                              ...current,
+                              factorResolutionMode: modeValue as FactorResolutionMode
+                            }))
+                          }
+                          type="button"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <small className={styles.fieldNote}>
+                      {getFactorResolutionDescription(locale, settingsDraft.factorResolutionMode)}
+                    </small>
+                  </div>
 
-                  {settingsDraft.factorResolutionMode !== "golden-bell" ? (
-                    <label className={styles.toggleField}>
+                  <div className={styles.settingsOptionGrid}>
+                    <label className={styles.toggleCard}>
                       <input
-                        data-testid="factor-single-attempt-toggle"
-                        checked={settingsDraft.factorSingleAttempt}
+                        data-testid="factor-prime-answer-toggle"
+                        checked={settingsDraft.factorPrimeAnswerMode === "number"}
                         onChange={(event) =>
                           onSettingsDraftChange((current) => ({
                             ...current,
-                            factorSingleAttempt: event.target.checked
+                            factorPrimeAnswerMode: event.target.checked ? "number" : "phrase"
                           }))
                         }
                         type="checkbox"
                       />
                       <span>
-                        {locale === "ko" ? "한 번 틀리면 입력 종료" : "Lock input after one wrong answer"}
+                        <strong>{copy.factorPrimeAnswerToggle}</strong>
+                        <small>{copy.factorPrimeAnswerHint}</small>
                       </span>
                     </label>
-                  ) : null}
+
+                    <label className={styles.toggleCard}>
+                      <input
+                        data-testid="factor-ordered-toggle"
+                        checked={settingsDraft.factorOrderedAnswer}
+                        onChange={(event) =>
+                          onSettingsDraftChange((current) => ({
+                            ...current,
+                            factorOrderedAnswer: event.target.checked
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      <span>
+                        <strong>{copy.factorOrderedLabel}</strong>
+                        <small>{copy.factorOrderedHint}</small>
+                      </span>
+                    </label>
+
+                    {settingsDraft.factorResolutionMode !== "golden-bell" ? (
+                      <label className={styles.toggleCard}>
+                        <input
+                          data-testid="factor-single-attempt-toggle"
+                          checked={settingsDraft.factorSingleAttempt}
+                          onChange={(event) =>
+                            onSettingsDraftChange((current) => ({
+                              ...current,
+                              factorSingleAttempt: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong>{copy.factorSingleAttemptLabel}</strong>
+                          <small>{copy.factorSingleAttemptHint}</small>
+                        </span>
+                      </label>
+                    ) : null}
+
+                    {settingsDraft.factorResolutionMode === "all-play" ? (
+                      <label className={styles.toggleCard}>
+                        <input
+                          data-testid="factor-sudden-death-toggle"
+                          checked={settingsDraft.factorSuddenDeath}
+                          onChange={(event) =>
+                            onSettingsDraftChange((current) => ({
+                              ...current,
+                              factorSuddenDeath: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong>{copy.factorSuddenDeathLabel}</strong>
+                          <small>{copy.factorSuddenDeathHint}</small>
+                        </span>
+                      </label>
+                    ) : null}
+                  </div>
                 </>
               )}
             </div>
@@ -2095,7 +2720,7 @@ function RoomExperience({
         >
           <section className={styles.settingsModal} data-testid="rules-modal">
             <div className={styles.modalHeader}>
-              <div>
+              <div className={styles.modalTitleBlock}>
                 <span className={styles.challengeLabel}>{locale === "ko" ? "게임 룰" : "Rules"}</span>
                 <strong>{locale === "ko" ? "이번 방 설명서" : "Room rulebook"}</strong>
               </div>
@@ -2111,48 +2736,86 @@ function RoomExperience({
               {rulesSummary.map((line) => (
                 <li key={line}>{line}</li>
               ))}
-              <li>
-                {locale === "ko"
-                  ? "포맷이 맞지 않는 입력은 활동 기록으로 남고, '/' 키로 다시 볼 수 있습니다."
-                  : "Malformed inputs are logged in the activity drawer. Press '/' to reopen it."}
-              </li>
             </ul>
+            <div className={styles.railActionRow}>
+              <button
+                className={styles.secondaryAction}
+                data-testid="score-guide-button"
+                onClick={() => {
+                  setIsRulesOpen(false);
+                  setIsScoreGuideOpen(true);
+                }}
+                type="button"
+              >
+                {copy.scoreGuideOpen}
+              </button>
+            </div>
           </section>
         </div>
       ) : null}
 
-      {isFeedOpen ? (
-        <div className={styles.activityPanel} data-testid="activity-panel">
-          <div className={styles.modalHeader}>
-            <div>
-              <span className={styles.challengeLabel}>{locale === "ko" ? "활동 기록" : "Activity"}</span>
-              <strong>{locale === "ko" ? "최근 입력" : "Recent entries"}</strong>
+      {isScoreGuideOpen ? (
+        <div
+          className={styles.modalBackdrop}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsScoreGuideOpen(false);
+            }
+          }}
+        >
+          <section className={`${styles.settingsModal} ${styles.scoreGuideModal}`} data-testid="score-guide-modal">
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitleBlock}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideLabel}</span>
+                <strong>{copy.scoreGuideTitle}</strong>
+              </div>
+              <button
+                className={styles.secondaryAction}
+                onClick={() => setIsScoreGuideOpen(false)}
+                type="button"
+              >
+                {copy.closePanel}
+              </button>
             </div>
-            <button
-              className={styles.secondaryAction}
-              onClick={() => setIsFeedOpen(false)}
-              type="button"
-            >
-              {copy.closePanel}
-            </button>
-          </div>
-          <div className={styles.activityList}>
-            {room.activityFeed.length === 0 ? (
-              <p className={styles.railBody}>
-                {locale === "ko" ? "아직 기록이 없습니다." : "No activity yet."}
-              </p>
-            ) : (
-              room.activityFeed
-                .slice()
-                .reverse()
-                .map((entry) => (
-                  <div className={styles.activityItem} data-kind={entry.kind} key={entry.id}>
-                    <strong>{entry.playerName ?? (locale === "ko" ? "시스템" : "System")}</strong>
-                    <p>{entry.text}</p>
-                  </div>
-                ))
-            )}
-          </div>
+
+            <p className={styles.railBody}>{copy.scoreGuideBody}</p>
+
+            <div className={styles.scoreGuideGrid}>
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideBaseHeading}</span>
+                <BlockMath math={getBaseScoreFormulaLatex()} />
+              </article>
+
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideTimedHeading}</span>
+                <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{remainingMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
+              </article>
+
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideGoldenBellHeading}</span>
+                <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{answerWindowMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
+              </article>
+
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideSuddenDeathHeading}</span>
+                <BlockMath math={"\\operatorname{score}=\\operatorname{base}(r)"} />
+              </article>
+
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuidePenaltyHeading}</span>
+                <BlockMath math={`\\operatorname{penalty}=-${GOLDEN_BELL_PENALTY_POINTS}`} />
+              </article>
+
+              <article className={styles.scoreGuideCard}>
+                <span className={styles.challengeLabel}>{copy.scoreGuideVariablesHeading}</span>
+                <div className={styles.scoreGuideVariables}>
+                  <BlockMath math={"\\operatorname{remainingMs}=\\operatorname{endsAt}-\\operatorname{submittedAt}"} />
+                  <BlockMath math={"\\operatorname{answerWindowMs}=\\operatorname{answerWindowEndsAt}-\\operatorname{submittedAt}"} />
+                  <BlockMath math={"\\operatorname{matchCap}=3600000\\,\\mathrm{ms}"} />
+                </div>
+              </article>
+            </div>
+          </section>
         </div>
       ) : null}
     </section>
@@ -2177,27 +2840,36 @@ function areSettingsEqual(left: LobbySettings, right: LobbySettings) {
     left.roundCount === right.roundCount &&
     left.roundTimeSec === right.roundTimeSec &&
     left.binaryDecimalToBinaryChance === right.binaryDecimalToBinaryChance &&
+    left.binaryLivePreview === right.binaryLivePreview &&
     left.factorResolutionMode === right.factorResolutionMode &&
     left.factorPrimeAnswerMode === right.factorPrimeAnswerMode &&
     left.factorOrderedAnswer === right.factorOrderedAnswer &&
-    left.factorSingleAttempt === right.factorSingleAttempt
+    left.factorSingleAttempt === right.factorSingleAttempt &&
+    left.factorSuddenDeath === right.factorSuddenDeath
   );
 }
 
-function formatPlayerMeta(
+function getLobbyPlayerNote(
   locale: Locale,
-  correctAnswers: number,
   isHost: boolean,
-  isOffline: boolean
+  isConnected: boolean,
+  isReady: boolean
 ) {
-  const copy = getCopy(locale);
-  const parts = [`${correctAnswers} ${copy.correctCountSuffix}`];
-
-  if (isOffline) {
-    parts.push(copy.offlineSuffix);
+  if (!isConnected) {
+    return locale === "ko" ? "현재 오프라인 상태입니다." : "Currently offline.";
   }
 
-  return parts.join(" · ");
+  if (isHost) {
+    return locale === "ko"
+      ? "룰을 정하고 게임을 시작하는 플레이어입니다."
+      : "This player controls the rules and starts the match.";
+  }
+
+  if (isReady) {
+    return locale === "ko" ? "게임 시작을 기다리는 중입니다." : "Waiting for the match to begin.";
+  }
+
+  return locale === "ko" ? "준비 버튼을 누르면 바로 시작할 수 있습니다." : "Ready up to start immediately.";
 }
 
 function getReadyButtonLabel(locale: Locale, isReady: boolean) {
@@ -2253,66 +2925,199 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
     locale === "ko"
       ? [
           `${getModeLabelByLocale(locale, settings.mode)}`,
-          `${settings.roundCount}라운드 · ${settings.roundTimeSec}초 제한`,
+          `${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
           settings.mode === "binary"
             ? getBinaryRatioSummary(locale, settings.binaryDecimalToBinaryChance)
             : "소인수는 공백으로 구분해서 입력",
+          settings.mode === "binary"
+            ? `실시간 변환 프리뷰: ${settings.binaryLivePreview ? "켜짐" : "꺼짐"}`
+            : "",
           settings.mode === "factor"
             ? getFactorResolutionSummary(locale, settings.factorResolutionMode)
             : "",
           settings.mode === "factor"
             ? settings.factorPrimeAnswerMode === "number"
-              ? "소수 문제가 나오면 그 수 하나만 입력"
-              : '소수 문제가 나오면 "야호 소수다" 입력'
+              ? '소수 문제는 숫자 하나만 입력'
+              : '소수 문제는 기본적으로 "야호 소수다" 입력'
             : "",
-          settings.mode === "factor" && settings.factorOrderedAnswer
-            ? "하드 모드: 소수 순서를 그대로 유지해야 정답"
-            : "기본 모드: 소수 순서는 자유",
+          settings.mode === "factor"
+            ? settings.factorOrderedAnswer
+              ? "하드 모드: 소인수의 순서까지 정확히 맞춰야 정답"
+              : "기본 모드: 소인수 순서는 자유"
+            : "",
           settings.mode === "factor" &&
           settings.factorResolutionMode !== "golden-bell" &&
           settings.factorSingleAttempt
-            ? "오답 1회 후 입력 종료"
+            ? "정답 시도 기회는 1회만 허용"
             : settings.mode === "factor" && settings.factorResolutionMode !== "golden-bell"
               ? "오답 후 재입력 가능"
               : "",
+          settings.mode === "factor" &&
+          settings.factorResolutionMode === "all-play" &&
+          settings.factorSuddenDeath
+            ? "시간 안에 아무도 못 맞추면 서든데스로 전환"
+            : "",
           settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
-            ? "골든벨 실패 시 점수 차감 후 다시 답변권을 얻을 수 없음"
+            ? `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점`
             : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
               ? "첫 정답이 나오면 즉시 공개 단계로 이동"
               : "시간 종료 또는 전원 정답 시 공개 단계로 이동"
         ]
       : [
           `${getModeLabelByLocale(locale, settings.mode)}`,
-          `${settings.roundCount} rounds · ${settings.roundTimeSec}s`,
+          `${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
           settings.mode === "binary"
             ? getBinaryRatioSummary(locale, settings.binaryDecimalToBinaryChance)
             : "Separate prime factors with spaces",
+          settings.mode === "binary"
+            ? `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`
+            : "",
           settings.mode === "factor"
             ? getFactorResolutionSummary(locale, settings.factorResolutionMode)
             : "",
           settings.mode === "factor"
             ? settings.factorPrimeAnswerMode === "number"
               ? "Prime targets: enter the number only"
-              : 'Prime targets: enter "야호 소수다"'
+              : 'Prime targets: enter "야호 소수다" by default'
             : "",
-          settings.mode === "factor" && settings.factorOrderedAnswer
-            ? "Hard mode: factor order must match"
-            : "Default mode: factor order does not matter",
+          settings.mode === "factor"
+            ? settings.factorOrderedAnswer
+              ? "Hard mode: factor order must match exactly"
+              : "Default mode: factor order does not matter"
+            : "",
           settings.mode === "factor" &&
           settings.factorResolutionMode !== "golden-bell" &&
           settings.factorSingleAttempt
-            ? "One wrong answer locks the round input"
+            ? "Only one answer attempt is allowed"
             : settings.mode === "factor" && settings.factorResolutionMode !== "golden-bell"
               ? "Wrong answers can be retried"
               : "",
+          settings.mode === "factor" &&
+          settings.factorResolutionMode === "all-play" &&
+          settings.factorSuddenDeath
+            ? "If nobody solves in time, the room flips into sudden death"
+            : "",
           settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
-            ? "A failed golden bell answer deducts points and ends that player's chance"
+            ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}`
             : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
               ? "The first correct answer immediately triggers reveal"
               : "Reveal happens on timeout or when everyone is correct"
         ];
 
   return lines.filter(Boolean);
+}
+
+function getRoundTimeSummary(locale: Locale, settings: LobbySettings) {
+  if (settings.mode === "factor" && settings.factorResolutionMode === "golden-bell") {
+    return locale === "ko" ? getCopy(locale).untimedLabel : getCopy(locale).untimedLabel;
+  }
+
+  return locale === "ko"
+    ? `${settings.roundTimeSec}${getCopy(locale).secondsUnit} 제한`
+    : `${settings.roundTimeSec}s`;
+}
+
+function getFactorResolutionDescription(locale: Locale, mode: FactorResolutionMode) {
+  const copy = getCopy(locale);
+  if (mode === "first-correct") {
+    return copy.factorResolutionFirstCorrectBody;
+  }
+
+  if (mode === "golden-bell") {
+    return copy.factorResolutionGoldenBellBody;
+  }
+
+  return copy.factorResolutionAllPlayBody;
+}
+
+function getRevealSummary(
+  locale: Locale,
+  room: RoomSnapshot,
+  correctPlayers: Array<{ name: string }>
+) {
+  const resolutionMode =
+    room.settings.mode === "factor" ? room.settings.factorResolutionMode : "all-play";
+
+  if (room.settings.mode === "factor" && resolutionMode !== "all-play") {
+    return {
+      label: locale === "ko" ? "정답자" : "solver",
+      value:
+        correctPlayers.length > 0
+          ? correctPlayers.map((entry) => entry.name).join(locale === "ko" ? ", " : " / ")
+          : locale === "ko"
+            ? "없음"
+            : "none"
+    };
+  }
+
+  return {
+    label: locale === "ko" ? "정답 맞춘 사람" : "solved",
+    value:
+      locale === "ko"
+        ? `${correctPlayers.length}명`
+        : `${correctPlayers.length} players`
+  };
+}
+
+function getRevealDeltaRange(
+  locale: Locale,
+  rows: Array<{ delta: number }>
+) {
+  if (rows.length === 0) {
+    return "0";
+  }
+
+  const deltas = rows.map((entry) => entry.delta);
+  const maxDelta = Math.max(...deltas);
+  const minDelta = Math.min(...deltas);
+
+  if (maxDelta === minDelta) {
+    return formatSignedScore(maxDelta);
+  }
+
+  return locale === "ko"
+    ? `${formatSignedScore(maxDelta)} ~ ${formatSignedScore(minDelta)}`
+    : `${formatSignedScore(maxDelta)} to ${formatSignedScore(minDelta)}`;
+}
+
+function getRevealStatusLabel(locale: Locale, status: PlayerRoundStatus) {
+  if (status.hasSubmitted) {
+    return locale === "ko" ? "정답 제출 성공" : "Correct answer";
+  }
+
+  if ((status.scoreDelta ?? 0) < 0) {
+    return locale === "ko" ? "패널티 적용" : "Penalty applied";
+  }
+
+  if (status.isLockedOut) {
+    return locale === "ko" ? "기회 소진" : "Locked out";
+  }
+
+  if (status.lastSubmissionKind === "wrong") {
+    return locale === "ko" ? "오답 제출" : "Wrong answer";
+  }
+
+  return locale === "ko" ? "점수 변화 없음" : "No score change";
+}
+
+function getScoreDeltaTone(delta: number) {
+  if (delta > 0) {
+    return "positive";
+  }
+
+  if (delta < 0) {
+    return "negative";
+  }
+
+  return "neutral";
+}
+
+function formatSignedScore(delta: number) {
+  if (delta > 0) {
+    return `+${delta}`;
+  }
+
+  return String(delta);
 }
 
 function getFactorAnswerInlineHint(
@@ -2327,6 +3132,25 @@ function getFactorAnswerInlineHint(
   return primeAnswerMode === "number"
     ? copy.answerHintFactorPrimeNumber
     : copy.answerHintFactorPrimePhrase;
+}
+
+function getBinaryPreviewText(
+  locale: Locale,
+  meta: BinaryChallengeMeta,
+  answerDraft: string
+) {
+  const previewValue = getBinaryPreviewValue(meta, answerDraft);
+  if (!previewValue) {
+    return "";
+  }
+
+  return meta.direction === "decimal-to-binary"
+    ? locale === "ko"
+      ? `10진수 ${previewValue}`
+      : `decimal ${previewValue}`
+    : locale === "ko"
+      ? `2진수 ${previewValue}`
+      : `binary ${previewValue}`;
 }
 
 function getRoundBoardStatus(locale: Locale, status?: PlayerRoundStatus | null) {
@@ -2348,10 +3172,6 @@ function getRoundBoardStatus(locale: Locale, status?: PlayerRoundStatus | null) 
 
   if (status.lastSubmissionKind === "wrong") {
     return locale === "ko" ? "오답 제출" : "wrong";
-  }
-
-  if (status.lastSubmissionKind === "chat") {
-    return locale === "ko" ? "채팅형 입력" : "chat-like";
   }
 
   return locale === "ko" ? "대기" : "waiting";
@@ -2378,11 +3198,88 @@ function getLeaderboardState(status?: PlayerRoundStatus | null) {
     return "wrong";
   }
 
-  if (status.lastSubmissionKind === "chat") {
-    return "chat";
+  return "waiting";
+}
+
+function ThemeModeIcon({ mode }: { mode: "light" | "dark" }) {
+  if (mode === "light") {
+    return (
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" fill="currentColor" r="4.5" />
+        <path
+          d="M12 1.75v3M12 19.25v3M4.75 4.75l2.12 2.12M17.13 17.13l2.12 2.12M1.75 12h3M19.25 12h3M4.75 19.25l2.12-2.12M17.13 6.87l2.12-2.12"
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="1.7"
+        />
+      </svg>
+    );
   }
 
-  return "waiting";
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M14.35 2.2c-3.92.98-6.6 4.78-6.18 8.85.45 4.43 4.41 7.67 8.84 7.22 2.2-.22 4.18-1.31 5.57-2.96-.67 3.59-3.8 6.38-7.67 6.76-5.23.52-9.9-3.28-10.43-8.51C3.95 8.68 7.76 4 12.99 3.48c.46-.05.91-.07 1.36-.05Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function CopyLinkIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <rect
+        fill="none"
+        height="10"
+        rx="1.6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="10"
+        x="9"
+        y="7"
+      />
+      <path
+        d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+function getBaseScoreFormulaLatex() {
+  const cases = SCORE_BASE_POINTS_BY_RANK.map(
+    (points, index) => `${points},&r=${index + 1}`
+  ).join("\\\\");
+  const fallbackRank = SCORE_BASE_POINTS_BY_RANK.length + 1;
+
+  return `\\operatorname{base}(r)=\\begin{cases}${cases}\\\\${SCORE_FALLBACK_POINTS},&r\\ge ${fallbackRank}\\end{cases}`;
+}
+
+function getRecentChatByPlayer(chatFeed: RoomSnapshot["chatFeed"], now: number) {
+  const bubbles = new Map<string, RoomSnapshot["chatFeed"][number]>();
+  const cutoff = now - 4500;
+
+  for (let index = chatFeed.length - 1; index >= 0; index -= 1) {
+    const entry = chatFeed[index];
+    if (!entry) {
+      continue;
+    }
+
+    if (entry.createdAt < cutoff) {
+      break;
+    }
+
+    if (!bubbles.has(entry.playerId)) {
+      bubbles.set(entry.playerId, entry);
+    }
+  }
+
+  return bubbles;
 }
 
 function formatClock(totalMs: number, locale: Locale) {
@@ -2439,23 +3336,25 @@ function getSharedSocket() {
   return sharedSocket;
 }
 
-function writeRoomSession(roomId: string, playerId: string, name: string) {
+function writeRoomSession(roomId: string, playerId: string, name: string, role?: RoomRole) {
   window.localStorage.setItem(
     `${ROOM_SESSION_PREFIX}${roomId}`,
-    JSON.stringify({ playerId, name })
+    JSON.stringify({ playerId, name, role })
   );
 }
 
-function readRoomSession(roomId: string): { playerId: string; name: string } | null {
+function readRoomSession(roomId: string): { playerId: string; name: string; role?: RoomRole } | null {
   const rawValue = window.localStorage.getItem(`${ROOM_SESSION_PREFIX}${roomId}`);
   if (!rawValue) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(rawValue) as { playerId?: string; name?: string };
+    const parsed = JSON.parse(rawValue) as { playerId?: string; name?: string; role?: RoomRole };
     if (parsed.playerId && parsed.name) {
-      return { playerId: parsed.playerId, name: parsed.name };
+      return parsed.role
+        ? { playerId: parsed.playerId, name: parsed.name, role: parsed.role }
+        : { playerId: parsed.playerId, name: parsed.name };
     }
   } catch {
     return null;
@@ -2533,6 +3432,10 @@ function getErrorMessage(error: unknown, locale: Locale) {
       ko: "방 초기화는 방장만 할 수 있습니다.",
       en: "Only the host can reset the room."
     },
+    "Spectators cannot use that action.": {
+      ko: "관전자는 이 동작을 사용할 수 없습니다.",
+      en: "Spectators cannot use that action."
+    },
     "Only the host can rename the room.": {
       ko: "방 이름 변경은 방장만 할 수 있습니다.",
       en: "Only the host can rename the room."
@@ -2544,6 +3447,14 @@ function getErrorMessage(error: unknown, locale: Locale) {
     "Ready state is only available in the lobby.": {
       ko: "준비 상태는 로비에서만 바꿀 수 있습니다.",
       en: "Ready state is only available in the lobby."
+    },
+    "You can only take a player seat from the lobby.": {
+      ko: "플레이어 좌석 참가는 로비에서만 가능합니다.",
+      en: "You can only take a player seat from the lobby."
+    },
+    "All player seats are already taken.": {
+      ko: "플레이어 좌석이 이미 모두 찼습니다.",
+      en: "All player seats are already taken."
     },
     "There is no active round right now.": {
       ko: "지금은 진행 중인 라운드가 없습니다.",

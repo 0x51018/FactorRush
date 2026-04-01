@@ -78,6 +78,14 @@ async function switchToEnglish(page: Page) {
 }
 
 test("landing keeps both forms inside a 720p viewport", async ({ page }) => {
+  const hydrationErrors: string[] = [];
+  page.on("console", (message) => {
+    const text = message.text();
+    if (message.type() === "error" && /hydration|hydrated but some attributes/i.test(text)) {
+      hydrationErrors.push(text);
+    }
+  });
+
   await switchToEnglish(page);
   await expect(page.getByTestId("create-room-button")).toBeVisible();
   await expect(page.getByTestId("join-room-button")).toBeVisible();
@@ -105,6 +113,8 @@ test("landing keeps both forms inside a 720p viewport", async ({ page }) => {
     path: ".codex-artifacts/qa-dark-landing.png",
     fullPage: true
   });
+
+  expect(hydrationErrors).toHaveLength(0);
 });
 
 test("invite flow, ready gate, factor options, and final results all work together", async ({
@@ -143,8 +153,8 @@ test("invite flow, ready gate, factor options, and final results all work togeth
     .toContain(`/room/${roomId}`);
 
   await hostPage.getByTestId("settings-button").click();
-  await expect(hostPage.getByTestId("factor-prime-answer-select")).toBeVisible();
-  await hostPage.getByTestId("factor-resolution-select").selectOption("first-correct");
+  await expect(hostPage.getByTestId("factor-prime-answer-toggle")).toBeVisible();
+  await hostPage.getByTestId("factor-resolution-first-correct").click();
   await setRangeValue(hostPage.getByTestId("round-count-range"), 12);
   await expect(hostPage.locator("body")).toContainText("12 rounds");
   await setRangeValue(hostPage.getByTestId("round-count-range"), 3);
@@ -163,6 +173,12 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await expect(guestPage.getByTestId("ready-button")).toBeVisible();
   await expect(hostPage.locator("body")).toContainText("GuestBeta");
 
+  await guestPage.getByTestId("player-name-button").click();
+  await guestPage.getByTestId("player-name-input").fill("GuestNova");
+  await guestPage.getByTestId("player-name-input").press("Enter");
+  await expect(guestPage.getByTestId("player-name-button")).toHaveText("GuestNova");
+  await expect(hostPage.locator("body")).toContainText("GuestNova");
+
   await hostPage.screenshot({
     path: ".codex-artifacts/qa-lobby.png",
     fullPage: true
@@ -172,9 +188,7 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await expect(hostPage.locator("body")).toContainText("1/1 ready");
   await hostPage.getByTestId("settings-button").click();
   await setRangeValue(hostPage.getByTestId("time-limit-range"), 35);
-  await expect(hostPage.locator("body")).toContainText(
-    "Rules changed and ready states were cleared."
-  );
+  await expect(hostPage.locator("body")).toContainText("Updated rules applied.");
   await expect(hostPage.locator("body")).toContainText("0/1 ready");
   await hostPage.getByRole("button", { name: "Close" }).click();
 
@@ -189,19 +203,19 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await expect(hostPage.getByTestId("answer-input")).toBeVisible();
   await expect(guestPage.getByTestId("answer-input")).toBeVisible();
 
+  await expect(guestPage.getByTestId("chat-panel")).toBeVisible();
+  await expect(guestPage.getByTestId("chat-input")).toBeVisible();
+  await guestPage.getByTestId("chat-input").fill("hello room");
+  await guestPage.getByTestId("chat-send-button").click();
+  await expect(guestPage.getByTestId("chat-input")).toHaveValue("");
+
+  await expect(hostPage.getByTestId("chat-panel")).toBeVisible();
+  await expect(hostPage.getByTestId("chat-list")).toContainText("GuestNova");
+  await expect(hostPage.getByTestId("chat-list")).toContainText("hello room");
+
   await hostPage.locator("body").click({ position: { x: 40, y: 40 } });
   await hostPage.keyboard.press("Enter");
   await expect(hostPage.getByTestId("answer-input")).toBeFocused();
-
-  await guestPage.getByTestId("answer-input").fill("hello");
-  await guestPage.getByTestId("submit-answer-button").click();
-  await expect(guestPage.getByTestId("answer-input")).toHaveValue("");
-
-  await hostPage.locator("body").click({ position: { x: 40, y: 40 } });
-  await hostPage.keyboard.press("/");
-  await expect(hostPage.getByTestId("activity-panel")).toContainText("GuestBeta");
-  await expect(hostPage.getByTestId("activity-panel")).toContainText("hello");
-  await hostPage.getByRole("button", { name: "Close" }).click();
 
   await guestPage.getByTestId("answer-input").fill("4 4");
   await guestPage.getByTestId("submit-answer-button").click();
@@ -214,6 +228,13 @@ test("invite flow, ready gate, factor options, and final results all work togeth
     await hostPage.getByTestId("answer-input").fill(answer);
     await hostPage.getByTestId("submit-answer-button").click();
     await expect(hostPage.getByTestId("round-reveal-panel")).toBeVisible();
+
+    if (roundIndex === 0) {
+      await hostPage.screenshot({
+        path: ".codex-artifacts/qa-reveal.png",
+        fullPage: true
+      });
+    }
 
     if (roundIndex < 2) {
       await expect(hostPage.getByTestId("answer-input")).toBeVisible({ timeout: 10_000 });
@@ -261,7 +282,7 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
   await guestPage.getByTestId("invite-join-button").click();
 
   await hostPage.getByTestId("settings-button").click();
-  await hostPage.getByTestId("factor-resolution-select").selectOption("golden-bell");
+  await hostPage.getByTestId("factor-resolution-golden-bell").click();
   await hostPage.getByRole("button", { name: "Close" }).click();
 
   await guestPage.getByTestId("ready-button").click();
@@ -292,15 +313,97 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
   await guestContext.close();
 });
 
+test("host can abort an active match and return everyone to the lobby", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("ResetHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("ResetGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await guestPage.getByTestId("ready-button").click();
+
+  await hostPage.getByTestId("start-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+  await expect(guestPage.getByTestId("answer-input")).toBeVisible();
+  await expect(hostPage.getByTestId("live-reset-button")).toBeVisible();
+  await expect(guestPage.getByTestId("live-reset-button")).toHaveCount(0);
+
+  await hostPage.getByTestId("live-reset-button").click();
+  await expect(hostPage.getByTestId("start-button")).toBeVisible({ timeout: 10_000 });
+  await expect(guestPage.getByTestId("ready-button")).toBeVisible({ timeout: 10_000 });
+  await expect(hostPage.locator("body")).toContainText("Returned to the lobby.");
+
+  await hostContext.close();
+  await guestContext.close();
+});
+
+test("mid-match joiners spectate first and can take a player seat back in the lobby", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const spectatorContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+  const spectatorPage = await spectatorContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("SpecHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("SpecGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await guestPage.getByTestId("ready-button").click();
+  await hostPage.getByTestId("start-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+
+  await spectatorPage.goto(inviteUrl);
+  await expect(spectatorPage.getByTestId("invite-name-input")).toBeVisible();
+  await spectatorPage.getByTestId("invite-name-input").fill("SpecWatcher");
+  await spectatorPage.getByTestId("invite-join-button").click();
+  await expect(spectatorPage.getByTestId("spectator-panel")).toBeVisible();
+  await expect(spectatorPage.locator("body")).toContainText("spectating");
+  await expect(hostPage.locator("body")).toContainText("SpecWatcher");
+
+  await hostPage.getByTestId("live-reset-button").click();
+  await expect(spectatorPage.getByTestId("become-player-button")).toBeVisible({ timeout: 10_000 });
+  await spectatorPage.getByTestId("become-player-button").click();
+  await expect(spectatorPage.getByTestId("ready-button")).toBeVisible();
+  await spectatorPage.getByTestId("ready-button").click();
+  await guestPage.getByTestId("ready-button").click();
+  await expect(hostPage.locator("body")).toContainText("2/2 ready");
+
+  await hostContext.close();
+  await guestContext.close();
+  await spectatorContext.close();
+});
+
 test("binary mode can be forced to decimal to binary", async ({ page }) => {
   await switchToEnglish(page);
   await page.getByTestId("create-name-input").fill("BinarySolo");
-  await page.getByTestId("create-mode-select").selectOption("binary");
+  await page.getByTestId("create-mode-binary").click();
   await page.getByTestId("create-room-button").click();
 
   await page.getByTestId("settings-button").click();
-  await page.getByTestId("settings-mode-select").selectOption("binary");
+  await page.getByTestId("settings-mode-binary").click();
   await setRangeValue(page.getByTestId("binary-ratio-range"), 100);
+  await expect(page.getByTestId("binary-preview-toggle")).toBeChecked();
   await page.getByRole("button", { name: "Close" }).click();
 
   await page.getByTestId("start-button").click();
@@ -309,6 +412,8 @@ test("binary mode can be forced to decimal to binary", async ({ page }) => {
   const prompt = (await page.locator("h4").first().textContent()) ?? "";
   expect(prompt).toMatch(/to binary/i);
 
+  await page.getByTestId("answer-input").fill("1010");
+  await expect(page.getByTestId("binary-preview")).toContainText("decimal 10");
   await page.getByTestId("answer-input").fill(solveBinaryPrompt(prompt));
   await page.getByTestId("submit-answer-button").click();
   await expect(page.getByTestId("round-reveal-panel")).toBeVisible();

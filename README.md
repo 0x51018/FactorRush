@@ -6,6 +6,7 @@ This first pass ships two rough game modes:
 
 - `Prime Factor Sprint`: players race to break a target number into prime factors.
 - `Decimal / Binary Blitz`: players race to convert decimal to binary or binary back to decimal.
+- Mid-match joins enter as spectators and can take a player seat from the lobby later.
 
 There is no database, no login, and no public matchmaking. Rooms live entirely in server memory and are shared by link.
 
@@ -62,6 +63,7 @@ The smoke test checks the realtime room flow:
 
 - room creation
 - player join
+- spectator join during a live match
 - game start
 - correct answer submission
 - round end
@@ -70,6 +72,7 @@ The smoke test checks the realtime room flow:
 
 - The host creates a room and shares the generated invite link.
 - Anyone with the link can join by entering a nickname.
+- If the match is already running, new arrivals join as spectators first.
 - The host chooses the mode, round count, and round timer in the lobby.
 - Every round generates one challenge for the whole room.
 - Correct answers score points, and earlier correct answers score more.
