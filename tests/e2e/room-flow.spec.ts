@@ -107,7 +107,7 @@ test("landing keeps both forms inside a 720p viewport", async ({ page }) => {
     return window.getComputedStyle(element).backgroundImage;
   });
   expect(darkHeroBackground).not.toEqual(lightHeroBackground);
-  expect(darkHeroBackground).toContain("46, 50, 62");
+  expect(darkHeroBackground).toContain("rgb(48, 48, 47)");
 
   await page.screenshot({
     path: ".codex-artifacts/qa-dark-landing.png",
@@ -153,12 +153,12 @@ test("invite flow, ready gate, factor options, and final results all work togeth
     .toContain(`/room/${roomId}`);
 
   await hostPage.getByTestId("settings-button").click();
-  await expect(hostPage.getByTestId("factor-prime-answer-toggle")).toBeVisible();
+  await expect(hostPage.getByTestId("factor-prime-answer-toggle")).toBeAttached();
   await hostPage.getByTestId("factor-resolution-first-correct").click();
   await setRangeValue(hostPage.getByTestId("round-count-range"), 12);
   await expect(hostPage.locator("body")).toContainText("12 rounds");
   await setRangeValue(hostPage.getByTestId("round-count-range"), 3);
-  await hostPage.getByTestId("factor-single-attempt-toggle").click();
+  await hostPage.getByTestId("factor-single-attempt-card").click();
   await expect(hostPage.getByTestId("factor-single-attempt-toggle")).toBeChecked();
   await expect(hostPage.locator("body")).toContainText("First-correct mode");
   await hostPage.getByRole("button", { name: "Close" }).click();

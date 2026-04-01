@@ -981,6 +981,28 @@ function LandingExperience({
   hintedRoomId
 }: LandingExperienceProps) {
   const copy = getCopy(locale);
+  const heroTiles = [
+    {
+      label: locale === "ko" ? "모드 A" : "mode a",
+      title: getModeLabelByLocale(locale, "factor"),
+      body: getModeDescriptionByLocale(locale, "factor")
+    },
+    {
+      label: locale === "ko" ? "모드 B" : "mode b",
+      title: getModeLabelByLocale(locale, "binary"),
+      body: getModeDescriptionByLocale(locale, "binary")
+    },
+    {
+      label: copy.inviteLineLabel,
+      title: copy.shareUrlLabel,
+      body: copy.storyOne
+    },
+    {
+      label: copy.liveBoardLabel,
+      title: copy.liveBoardTitle,
+      body: copy.storyTwo
+    }
+  ];
 
   return (
     <section className={styles.poster}>
@@ -993,6 +1015,16 @@ function LandingExperience({
             {copy.heroTitleBottom}
           </h2>
           <p className={styles.heroDescription}>{copy.heroDescription}</p>
+        </div>
+
+        <div className={styles.heroModuleGrid}>
+          {heroTiles.map((tile) => (
+            <article className={styles.heroModule} key={`${tile.label}-${tile.title}`}>
+              <span>{tile.label}</span>
+              <strong>{tile.title}</strong>
+              <p>{tile.body}</p>
+            </article>
+          ))}
         </div>
 
         <div className={styles.numberWall} aria-hidden="true">
@@ -1221,6 +1253,7 @@ function RoomExperience({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isScoreGuideOpen, setIsScoreGuideOpen] = useState(false);
+  const [scoreGuidePage, setScoreGuidePage] = useState<0 | 1>(0);
   const [chatDraft, setChatDraft] = useState("");
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isRenamingRoom, setIsRenamingRoom] = useState(false);
@@ -1365,6 +1398,12 @@ function RoomExperience({
   }, [overlayActive]);
 
   useEffect(() => {
+    if (isScoreGuideOpen) {
+      setScoreGuidePage(0);
+    }
+  }, [isScoreGuideOpen]);
+
+  useEffect(() => {
     setChatDraft("");
   }, [room.roomId]);
 
@@ -1503,6 +1542,7 @@ function RoomExperience({
   return (
     <section
       className={`${styles.roomLayout} ${!showAmbientInfo ? styles.roomLayoutCompact : ""}`}
+      data-phase={room.phase}
       data-overlay-active={overlayActive}
     >
       <div className={styles.stageColumn}>
@@ -1542,6 +1582,17 @@ function RoomExperience({
             )}
           </div>
           <div className={styles.broadcastMeta}>
+            {isHost && room.phase !== "lobby" && room.phase !== "finished" ? (
+              <button
+                className={styles.broadcastMetaButton}
+                data-testid="live-reset-button"
+                disabled={busyState === "reset"}
+                onClick={onResetRoom}
+                type="button"
+              >
+                {busyState === "reset" ? copy.resettingLobby : copy.resetLobby}
+              </button>
+            ) : null}
             <span className={styles.phaseBadge} data-phase={room.phase}>
               {getPhaseBadgeLabel(locale, room.phase)}
             </span>
@@ -1557,7 +1608,7 @@ function RoomExperience({
           </div>
         </section>
 
-        <section className={styles.stageSurface}>
+        <section className={styles.stageSurface} data-phase={room.phase}>
           {room.phase === "lobby" ? (
             <div className={styles.lobbyDeck}>
               <div className={styles.lobbyLead}>
@@ -1565,7 +1616,6 @@ function RoomExperience({
                   <div>
                     <span className={styles.challengeLabel}>{copy.lobbyRosterLabel}</span>
                     <h4>{copy.lobbyRosterTitle}</h4>
-                    <p>{copy.lobbyRosterBody}</p>
                   </div>
 
                   <div className={styles.actionRow}>
@@ -1954,6 +2004,7 @@ function RoomExperience({
                         ref={answerInputRef}
                         data-testid="answer-input"
                         onChange={(event) => onAnswerDraftChange(event.target.value)}
+                        onPaste={(event) => event.preventDefault()}
                         placeholder={
                           room.settings.mode === "factor"
                             ? copy.answerPlaceholderFactor
@@ -2257,19 +2308,6 @@ function RoomExperience({
             </div>
 
             <div className={styles.railFoot}>
-              <div className={styles.actionRow}>
-                {isHost ? (
-                  <button
-                    className={styles.secondaryAction}
-                    data-testid="live-reset-button"
-                    disabled={busyState === "reset"}
-                    onClick={onResetRoom}
-                    type="button"
-                  >
-                    {busyState === "reset" ? copy.resettingLobby : copy.resetLobby}
-                  </button>
-                ) : null}
-              </div>
               <p className={styles.compactHint}>
                 {locale === "ko"
                   ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
@@ -2459,7 +2497,7 @@ function RoomExperience({
                 <strong>{copy.lobbySettingsTitle}</strong>
               </div>
               <button
-                className={styles.secondaryAction}
+                className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
                 onClick={() => setIsSettingsOpen(false)}
                 type="button"
               >
@@ -2573,7 +2611,11 @@ function RoomExperience({
                     <small className={styles.fieldNote}>{copy.binaryRatioHint}</small>
                   </div>
 
-                  <label className={styles.toggleCard}>
+                  <label
+                    className={styles.toggleCard}
+                    data-active={settingsDraft.binaryLivePreview}
+                    data-testid="binary-preview-card"
+                  >
                     <input
                       data-testid="binary-preview-toggle"
                       checked={settingsDraft.binaryLivePreview}
@@ -2626,7 +2668,11 @@ function RoomExperience({
                   </div>
 
                   <div className={styles.settingsOptionGrid}>
-                    <label className={styles.toggleCard}>
+                    <label
+                      className={styles.toggleCard}
+                      data-active={settingsDraft.factorPrimeAnswerMode === "number"}
+                      data-testid="factor-prime-answer-card"
+                    >
                       <input
                         data-testid="factor-prime-answer-toggle"
                         checked={settingsDraft.factorPrimeAnswerMode === "number"}
@@ -2644,7 +2690,11 @@ function RoomExperience({
                       </span>
                     </label>
 
-                    <label className={styles.toggleCard}>
+                    <label
+                      className={styles.toggleCard}
+                      data-active={settingsDraft.factorOrderedAnswer}
+                      data-testid="factor-ordered-card"
+                    >
                       <input
                         data-testid="factor-ordered-toggle"
                         checked={settingsDraft.factorOrderedAnswer}
@@ -2663,7 +2713,11 @@ function RoomExperience({
                     </label>
 
                     {settingsDraft.factorResolutionMode !== "golden-bell" ? (
-                      <label className={styles.toggleCard}>
+                      <label
+                        className={styles.toggleCard}
+                        data-active={settingsDraft.factorSingleAttempt}
+                        data-testid="factor-single-attempt-card"
+                      >
                         <input
                           data-testid="factor-single-attempt-toggle"
                           checked={settingsDraft.factorSingleAttempt}
@@ -2683,7 +2737,11 @@ function RoomExperience({
                     ) : null}
 
                     {settingsDraft.factorResolutionMode === "all-play" ? (
-                      <label className={styles.toggleCard}>
+                      <label
+                        className={styles.toggleCard}
+                        data-active={settingsDraft.factorSuddenDeath}
+                        data-testid="factor-sudden-death-card"
+                      >
                         <input
                           data-testid="factor-sudden-death-toggle"
                           checked={settingsDraft.factorSuddenDeath}
@@ -2725,7 +2783,7 @@ function RoomExperience({
                 <strong>{locale === "ko" ? "이번 방 설명서" : "Room rulebook"}</strong>
               </div>
               <button
-                className={styles.secondaryAction}
+                className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
                 onClick={() => setIsRulesOpen(false)}
                 type="button"
               >
@@ -2770,7 +2828,7 @@ function RoomExperience({
                 <strong>{copy.scoreGuideTitle}</strong>
               </div>
               <button
-                className={styles.secondaryAction}
+                className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
                 onClick={() => setIsScoreGuideOpen(false)}
                 type="button"
               >
@@ -2780,41 +2838,64 @@ function RoomExperience({
 
             <p className={styles.railBody}>{copy.scoreGuideBody}</p>
 
-            <div className={styles.scoreGuideGrid}>
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuideBaseHeading}</span>
-                <BlockMath math={getBaseScoreFormulaLatex()} />
-              </article>
-
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuideTimedHeading}</span>
-                <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{remainingMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
-              </article>
-
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuideGoldenBellHeading}</span>
-                <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{answerWindowMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
-              </article>
-
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuideSuddenDeathHeading}</span>
-                <BlockMath math={"\\operatorname{score}=\\operatorname{base}(r)"} />
-              </article>
-
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuidePenaltyHeading}</span>
-                <BlockMath math={`\\operatorname{penalty}=-${GOLDEN_BELL_PENALTY_POINTS}`} />
-              </article>
-
-              <article className={styles.scoreGuideCard}>
-                <span className={styles.challengeLabel}>{copy.scoreGuideVariablesHeading}</span>
-                <div className={styles.scoreGuideVariables}>
-                  <BlockMath math={"\\operatorname{remainingMs}=\\operatorname{endsAt}-\\operatorname{submittedAt}"} />
-                  <BlockMath math={"\\operatorname{answerWindowMs}=\\operatorname{answerWindowEndsAt}-\\operatorname{submittedAt}"} />
-                  <BlockMath math={"\\operatorname{matchCap}=3600000\\,\\mathrm{ms}"} />
-                </div>
-              </article>
+            <div className={`${styles.modeChoiceRow} ${styles.scoreGuideTabRow}`} data-columns="2">
+              <button
+                className={styles.modeChoiceButton}
+                data-active={scoreGuidePage === 0}
+                onClick={() => setScoreGuidePage(0)}
+                type="button"
+              >
+                {locale === "ko" ? "공식" : "Formulas"}
+              </button>
+              <button
+                className={styles.modeChoiceButton}
+                data-active={scoreGuidePage === 1}
+                onClick={() => setScoreGuidePage(1)}
+                type="button"
+              >
+                {locale === "ko" ? "변수 · 패널티" : "Variables · Penalties"}
+              </button>
             </div>
+
+            {scoreGuidePage === 0 ? (
+              <div className={styles.scoreGuidePage}>
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuideBaseHeading}</span>
+                  <BlockMath math={getBaseScoreFormulaLatex()} />
+                </article>
+
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuideTimedHeading}</span>
+                  <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{remainingMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
+                </article>
+
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuideGoldenBellHeading}</span>
+                  <BlockMath math={`\\operatorname{score}=\\operatorname{base}(r)+\\operatorname{round}\\left(\\frac{\\operatorname{answerWindowMs}}{1000}\\right)\\times ${SCORE_SPEED_BONUS_PER_SECOND}`} />
+                </article>
+              </div>
+            ) : (
+              <div className={styles.scoreGuidePage}>
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuideSuddenDeathHeading}</span>
+                  <BlockMath math={"\\operatorname{score}=\\operatorname{base}(r)"} />
+                </article>
+
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuidePenaltyHeading}</span>
+                  <BlockMath math={`\\operatorname{penalty}=-${GOLDEN_BELL_PENALTY_POINTS}`} />
+                </article>
+
+                <article className={styles.scoreGuideCard}>
+                  <span className={styles.challengeLabel}>{copy.scoreGuideVariablesHeading}</span>
+                  <div className={styles.scoreGuideVariables}>
+                    <BlockMath math={"\\operatorname{remainingMs}=\\operatorname{endsAt}-\\operatorname{submittedAt}"} />
+                    <BlockMath math={"\\operatorname{answerWindowMs}=\\operatorname{answerWindowEndsAt}-\\operatorname{submittedAt}"} />
+                    <BlockMath math={"\\operatorname{matchCap}=3600000\\,\\mathrm{ms}"} />
+                  </div>
+                </article>
+              </div>
+            )}
           </section>
         </div>
       ) : null}
