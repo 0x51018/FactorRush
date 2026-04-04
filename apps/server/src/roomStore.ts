@@ -57,16 +57,18 @@ import {
 } from "@factorrush/shared";
 
 interface PlayerRecord extends PlayerSummary {
-  socketId: string;
+  socketId?: string;
   recentChatTimestamps: number[];
+  disconnectTimer: NodeJS.Timeout | null;
 }
 
 interface SpectatorRecord {
   id: string;
   name: string;
   connected: boolean;
-  socketId: string;
+  socketId?: string;
   recentChatTimestamps: number[];
+  disconnectTimer: NodeJS.Timeout | null;
 }
 
 interface AttemptRecord {
@@ -130,6 +132,7 @@ interface RoomRecord {
 const ROUND_REVEAL_MS = 5500;
 const FINAL_RESULTS_DELAY_MS = 1800;
 const RESULTS_AUTO_RESET_MS = 15000;
+const RECONNECT_GRACE_MS = 12_000;
 const CHAT_FEED_LIMIT = 40;
 const CHAT_RATE_LIMIT_WINDOW_MS = 10_000;
 const CHAT_RATE_LIMIT_MAX_MESSAGES = 5;
@@ -148,6 +151,12 @@ export class RoomStore {
       this.clearAnswerWindowTimer(room);
       this.clearCleanupTimer(room);
       this.clearMatchCapTimer(room);
+      for (const player of room.players) {
+        this.clearMemberDisconnectTimer(player);
+      }
+      for (const spectator of room.spectators) {
+        this.clearMemberDisconnectTimer(spectator);
+      }
     }
 
     this.rooms.clear();
@@ -182,7 +191,8 @@ export class RoomStore {
           correctAnswers: 0,
           isReady: false,
           socketId: socket.id,
-          recentChatTimestamps: []
+          recentChatTimestamps: [],
+          disconnectTimer: null
         }
       ],
       spectators: [],
@@ -241,6 +251,7 @@ export class RoomStore {
 
         reconnectingPlayer.socketId = socket.id;
         reconnectingPlayer.connected = true;
+        this.clearMemberDisconnectTimer(reconnectingPlayer);
 
         const nextName = sanitizePlayerName(request.playerName);
         if (nextName) {
@@ -271,6 +282,7 @@ export class RoomStore {
 
         reconnectingSpectator.socketId = socket.id;
         reconnectingSpectator.connected = true;
+        this.clearMemberDisconnectTimer(reconnectingSpectator);
 
         const nextName = sanitizePlayerName(request.playerName);
         if (nextName) {
@@ -305,7 +317,8 @@ export class RoomStore {
         name: spectatorName,
         connected: true,
         socketId: socket.id,
-        recentChatTimestamps: []
+        recentChatTimestamps: [],
+        disconnectTimer: null
       });
 
       this.socketToSeat.set(socket.id, { roomId, memberId: spectatorId, role: "spectator" });
@@ -332,12 +345,13 @@ export class RoomStore {
       id: playerId,
       name: playerName,
       score: 0,
-      isHost: false,
+      isHost: room.players.length === 0,
       connected: true,
       correctAnswers: 0,
       isReady: false,
       socketId: socket.id,
-      recentChatTimestamps: []
+      recentChatTimestamps: [],
+      disconnectTimer: null
     });
 
     this.socketToSeat.set(socket.id, { roomId, memberId: playerId, role: "player" });
@@ -478,12 +492,13 @@ export class RoomStore {
       id: playerId,
       name: this.createUniqueMemberName(room, spectator.name),
       score: 0,
-      isHost: false,
+      isHost: room.players.length === 0,
       connected: true,
       correctAnswers: 0,
       isReady: false,
       socketId: socket.id,
-      recentChatTimestamps: spectator.recentChatTimestamps
+      recentChatTimestamps: spectator.recentChatTimestamps,
+      disconnectTimer: null
     });
 
     this.socketToSeat.set(socket.id, { roomId: room.roomId, memberId: playerId, role: "player" });
@@ -892,13 +907,8 @@ export class RoomStore {
       if (!spectator) {
         return;
       }
-
-      room.spectators = room.spectators.filter((candidate) => candidate.id !== spectator.id);
-      if (room.players.length === 0 && room.spectators.length === 0) {
-        this.scheduleCleanup(room);
-        return;
-      }
-
+      spectator.connected = false;
+      this.scheduleMemberRemoval(room, spectator, "spectator");
       this.emitRoom(room);
       return;
     }
@@ -907,55 +917,8 @@ export class RoomStore {
     if (!player) {
       return;
     }
-
-    const removedName = player.name;
-    const removedWasHost = player.isHost;
-    const removedWasAnswering = room.round?.answeringPlayerId === player.id;
-    room.players = room.players.filter((candidate) => candidate.id !== player.id);
-
-    if (room.players.length === 0) {
-      if (room.spectators.length > 0) {
-        this.resetRoomToLobby(room);
-        this.promoteFirstSpectatorToHost(room);
-        room.message = `${room.players[0]?.name ?? "A spectator"} took the host seat after everyone left.`;
-        room.messageKey = "host-transferred";
-        room.messagePlayerName = room.players[0]?.name;
-        this.emitRoom(room);
-        return;
-      }
-
-      this.scheduleCleanup(room);
-      return;
-    }
-
-    if (removedWasHost) {
-      this.promoteNextHost(room);
-    }
-
-    room.message = `${removedName} left the room.`;
-    room.messageKey = "player-left";
-    room.messagePlayerName = removedName;
-
-    if (removedWasAnswering && room.round) {
-      this.clearAnswerWindowTimer(room);
-      room.round.answeringPlayerId = null;
-      room.round.answerWindowEndsAt = undefined;
-    }
-
-    if (this.haveAllGoldenBellPlayersResolved(room)) {
-      this.endRound(room.roomId, "all-resolved");
-      return;
-    }
-
-    if (this.haveAllConnectedPlayersAnswered(room)) {
-      this.endRound(room.roomId, "all-correct");
-      return;
-    }
-
-    if (!room.players.some((candidate) => candidate.connected)) {
-      this.scheduleCleanup(room);
-    }
-
+    player.connected = false;
+    this.scheduleMemberRemoval(room, player, "player");
     this.emitRoom(room);
   }
 
@@ -1355,6 +1318,113 @@ export class RoomStore {
     return room.settings.factorSingleAttempt && wrongAttempts > 0;
   }
 
+  private scheduleMemberRemoval(
+    room: RoomRecord,
+    member: PlayerRecord | SpectatorRecord,
+    role: RoomRole
+  ) {
+    this.clearMemberDisconnectTimer(member);
+    member.disconnectTimer = setTimeout(() => {
+      const latestRoom = this.rooms.get(room.roomId);
+      if (!latestRoom) {
+        return;
+      }
+
+      if (role === "spectator") {
+        this.finalizeSpectatorRemoval(latestRoom, member.id);
+      } else {
+        this.finalizePlayerRemoval(latestRoom, member.id);
+      }
+    }, RECONNECT_GRACE_MS).unref();
+  }
+
+  private clearMemberDisconnectTimer(member: PlayerRecord | SpectatorRecord) {
+    if (!member.disconnectTimer) {
+      return;
+    }
+
+    clearTimeout(member.disconnectTimer);
+    member.disconnectTimer = null;
+  }
+
+  private finalizeSpectatorRemoval(room: RoomRecord, spectatorId: string) {
+    const spectator = room.spectators.find((candidate) => candidate.id === spectatorId);
+    if (!spectator || spectator.connected) {
+      return;
+    }
+
+    this.clearMemberDisconnectTimer(spectator);
+    room.spectators = room.spectators.filter((candidate) => candidate.id !== spectator.id);
+
+    if (room.players.length === 0 && room.spectators.length === 0) {
+      this.scheduleCleanup(room);
+      return;
+    }
+
+    this.emitRoom(room);
+  }
+
+  private finalizePlayerRemoval(room: RoomRecord, playerId: string) {
+    const player = room.players.find((candidate) => candidate.id === playerId);
+    if (!player || player.connected) {
+      return;
+    }
+
+    this.clearMemberDisconnectTimer(player);
+
+    const removedName = player.name;
+    const removedWasHost = player.isHost;
+    const removedWasAnswering = room.round?.answeringPlayerId === player.id;
+    room.players = room.players.filter((candidate) => candidate.id !== player.id);
+
+    if (room.players.length === 0) {
+      if (room.spectators.length > 0) {
+        this.resetRoomToLobby(room);
+        this.promoteFirstConnectedSpectatorToHost(room);
+        if (room.players.length > 0) {
+          room.message = `${room.players[0]?.name ?? "A spectator"} took the host seat after everyone left.`;
+          room.messageKey = "host-transferred";
+          room.messagePlayerName = room.players[0]?.name;
+          this.emitRoom(room);
+          return;
+        }
+      }
+
+      this.scheduleCleanup(room);
+      return;
+    }
+
+    if (removedWasHost) {
+      this.promoteNextHost(room);
+    }
+
+    room.message = `${removedName} left the room.`;
+    room.messageKey = "player-left";
+    room.messagePlayerName = removedName;
+
+    if (removedWasAnswering && room.round) {
+      this.clearAnswerWindowTimer(room);
+      room.round.answeringPlayerId = null;
+      room.round.answerWindowEndsAt = undefined;
+    }
+
+    if (this.haveAllGoldenBellPlayersResolved(room)) {
+      this.endRound(room.roomId, "all-resolved");
+      return;
+    }
+
+    if (this.haveAllConnectedPlayersAnswered(room)) {
+      this.endRound(room.roomId, "all-correct");
+      return;
+    }
+
+    if (!room.players.some((candidate) => candidate.connected) && !room.spectators.some((candidate) => candidate.connected)) {
+      this.scheduleCleanup(room);
+    }
+
+    this.emitRoom(room);
+  }
+
   private promoteNextHost(room: RoomRecord) {
     const nextHost = room.players.find((candidate) => candidate.connected) ?? room.players[0];
     for (const player of room.players) {
@@ -1366,8 +1436,13 @@ export class RoomStore {
     return nextHost;
   }
 
-  private promoteFirstSpectatorToHost(room: RoomRecord) {
-    const promoted = room.spectators.shift();
+  private promoteFirstConnectedSpectatorToHost(room: RoomRecord) {
+    const spectatorIndex = room.spectators.findIndex((candidate) => candidate.connected);
+    if (spectatorIndex < 0) {
+      return null;
+    }
+
+    const [promoted] = room.spectators.splice(spectatorIndex, 1);
     if (!promoted) {
       return null;
     }
@@ -1382,9 +1457,14 @@ export class RoomStore {
       correctAnswers: 0,
       isReady: false,
       socketId: promoted.socketId,
-      recentChatTimestamps: promoted.recentChatTimestamps
+      recentChatTimestamps: promoted.recentChatTimestamps,
+      disconnectTimer: null
     });
-    this.socketToSeat.set(promoted.socketId, { roomId: room.roomId, memberId: playerId, role: "player" });
+
+    if (promoted.socketId) {
+      this.socketToSeat.set(promoted.socketId, { roomId: room.roomId, memberId: playerId, role: "player" });
+    }
+
     return room.players.at(-1) ?? null;
   }
 
