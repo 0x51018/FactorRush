@@ -2253,6 +2253,24 @@ function RoomExperience({
                 <strong>{copy.liveBoardTitle}</strong>
               </div>
               <p className={styles.railBody}>{copy.liveBoardBody}</p>
+              <div className={styles.liveMetricStrip}>
+                <div className={styles.liveMetricChip}>
+                  <span>{locale === "ko" ? "정답" : "correct"}</span>
+                  <strong>
+                    {submittedCount}/{room.players.length}
+                  </strong>
+                </div>
+                <div className={styles.liveMetricChip}>
+                  <span>{copy.spectatorLabel}</span>
+                  <strong>{room.spectators.length}</strong>
+                </div>
+                <div className={styles.liveMetricChip}>
+                  <span>{locale === "ko" ? "라운드" : "round"}</span>
+                  <strong>
+                    {room.round?.roundNumber ?? room.completedRounds}/{room.settings.roundCount}
+                  </strong>
+                </div>
+              </div>
 
               <div className={styles.leaderboardSection}>
                 <div className={styles.leaderboard} data-testid="leaderboard">
@@ -2307,14 +2325,6 @@ function RoomExperience({
                     </div>
                   </div>
                 ) : null}
-              </div>
-
-              <div className={styles.railFoot}>
-                <p className={styles.compactHint}>
-                  {locale === "ko"
-                    ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
-                    : `${submittedCount}/${room.players.length} players are correct.`}
-                </p>
               </div>
             </section>
 
