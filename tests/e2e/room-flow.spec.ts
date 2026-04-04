@@ -347,6 +347,50 @@ test("host can abort an active match and return everyone to the lobby", async ({
   await guestContext.close();
 });
 
+test("host keeps host rights after a page refresh and can still run the room", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("RefreshHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("RefreshGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await guestPage.getByTestId("ready-button").click();
+  await expect(hostPage.locator("body")).toContainText("1/1 ready");
+
+  await hostPage.reload();
+  await expect(hostPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await expect(hostPage.getByTestId("ready-button")).toHaveCount(0);
+  await expect(hostPage.locator("body")).toContainText("host");
+  await expect(hostPage.getByTestId("settings-button")).toBeVisible();
+  await expect(hostPage.getByTestId("start-button")).toBeVisible();
+
+  await hostPage.getByTestId("settings-button").click();
+  await expect(hostPage.getByTestId("settings-modal")).toBeVisible();
+  await hostPage.getByRole("button", { name: "Close" }).click();
+  await expect(hostPage.getByTestId("settings-modal")).toHaveCount(0);
+
+  await hostPage.getByTestId("start-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+  await expect(guestPage.getByTestId("answer-input")).toBeVisible();
+
+  await hostContext.close();
+  await guestContext.close();
+});
+
 test("mid-match joiners spectate first and can take a player seat back in the lobby", async ({
   browser
 }) => {
