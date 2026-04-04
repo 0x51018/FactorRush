@@ -169,9 +169,12 @@ export interface SubmissionEvaluation {
 
 export interface ChatMessage {
   id: string;
-  playerId: string;
-  playerName: string;
+  kind: "player" | "system";
+  playerId?: string;
+  playerName?: string;
   text: string;
+  systemKey?: "match-started" | "player-correct" | "player-wrong";
+  answerText?: string;
   createdAt: number;
 }
 

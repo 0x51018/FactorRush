@@ -6,7 +6,7 @@
  * - 컬러 토큰과 공통 리셋 정의
  * - 앱 전체 배경과 기본 타이포 세팅
  */
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap");
 
 :root {
   color-scheme: light;
@@ -146,7 +146,7 @@ input,
 select,
 textarea {
   font: inherit;
-  font-family: "IBM Plex Mono", monospace;
+  font-family: inherit;
 }
 
 input,

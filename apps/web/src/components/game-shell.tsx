@@ -78,7 +78,6 @@ type ThemeMode = "light" | "dark";
 const DISPLAY_NAME_KEY = "factorrush:last-name";
 const ROOM_SESSION_PREFIX = "factorrush:room:";
 const LOCALE_STORAGE_KEY = "factorrush:locale";
-const MAX_VISIBLE_CHAT_MESSAGES = 10;
 const THEME_STORAGE_KEY = "factorrush:theme";
 let sharedSocket: Socket | null = null;
 let latestSharedRoomState: RoomSnapshot | null = null;
@@ -1327,7 +1326,7 @@ function RoomExperience({
   const settingsTimeSummary = getRoundTimeSummary(locale, settingsDraft);
   const isGoldenBellSettings =
     settingsDraft.mode === "factor" && settingsDraft.factorResolutionMode === "golden-bell";
-  const visibleChatFeed = room.chatFeed.slice(-MAX_VISIBLE_CHAT_MESSAGES);
+  const visibleChatFeed = room.chatFeed;
   const recentChatByPlayer = getRecentChatByPlayer(room.chatFeed, now);
   const isGoldenBellRound =
     room.phase === "round-active" &&
@@ -1540,11 +1539,7 @@ function RoomExperience({
   };
 
   return (
-    <section
-      className={`${styles.roomLayout} ${!showAmbientInfo ? styles.roomLayoutCompact : ""}`}
-      data-phase={room.phase}
-      data-overlay-active={overlayActive}
-    >
+    <section className={styles.roomLayout} data-phase={room.phase} data-overlay-active={overlayActive}>
       <div className={styles.stageColumn}>
         <section className={styles.broadcastLine}>
           <div>
@@ -2122,21 +2117,28 @@ function RoomExperience({
                 <span>{copy.feedLabel}</span>
                 <strong>{copy.lobbyChatTitle}</strong>
               </div>
-              <div
-                className={`${styles.chatList} ${styles.lobbyChatList}`}
-                data-testid="lobby-chat-list"
-                ref={lobbyChatListRef}
-              >
-                {visibleChatFeed.length === 0 ? (
-                  <p className={styles.railBody}>{copy.noChatYet}</p>
-                ) : (
-                  visibleChatFeed.map((entry) => (
-                    <div className={styles.lobbyChatLine} key={entry.id}>
-                      <strong>{entry.playerName}</strong>
-                      <span>{entry.text}</span>
-                    </div>
-                  ))
-                )}
+              <div className={styles.chatScrollWell} ref={lobbyChatListRef}>
+                <div
+                  className={`${styles.chatList} ${styles.lobbyChatList}`}
+                  data-testid="lobby-chat-list"
+                >
+                  {visibleChatFeed.length === 0 ? (
+                    <p className={styles.railBody}>{copy.noChatYet}</p>
+                  ) : (
+                    visibleChatFeed.map((entry) =>
+                      entry.kind === "system" ? (
+                        <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
+                          <span>{getSystemChatMessage(entry, locale)}</span>
+                        </div>
+                      ) : (
+                        <div className={styles.lobbyChatLine} key={entry.id}>
+                          <strong>{entry.playerName}</strong>
+                          <span>{entry.text}</span>
+                        </div>
+                      )
+                    )
+                  )}
+                </div>
               </div>
               <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
                 <input
@@ -2190,7 +2192,8 @@ function RoomExperience({
             </section>
           </>
         ) : (
-          <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
+          <>
+            <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
             <div className={styles.railHeading}>
               <span>{copy.liveBoardLabel}</span>
               <strong>{copy.liveBoardTitle}</strong>
@@ -2266,45 +2269,6 @@ function RoomExperience({
                 ) : null}
               </div>
 
-              <section className={styles.liveChatDock} data-testid="chat-panel">
-                <div className={styles.railHeading}>
-                  <span>{copy.feedLabel}</span>
-                  <strong>{copy.feedTitle}</strong>
-                </div>
-                <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list" ref={chatListRef}>
-                  {visibleChatFeed.length === 0 ? (
-                    <p className={styles.railBody}>{copy.noChatYet}</p>
-                  ) : (
-                    visibleChatFeed.map((entry) => (
-                      <div className={styles.chatLine} key={entry.id}>
-                        <strong>{entry.playerName}</strong>
-                        <span>{entry.text}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
-                  <input
-                    ref={chatInputRef}
-                    data-testid="chat-input"
-                    maxLength={180}
-                    onChange={(event) => setChatDraft(event.target.value)}
-                    placeholder={copy.chatPlaceholder}
-                    type="text"
-                    value={chatDraft}
-                  />
-                  <button
-                    className={styles.primaryAction}
-                    data-testid="chat-send-button"
-                    disabled={!chatDraft.trim() || isSendingChat}
-                    type="submit"
-                  >
-                    {isSendingChat ? copy.sendingChat : copy.sendChat}
-                  </button>
-                </form>
-                <p className={styles.compactHint}>{copy.feedHint}</p>
-              </section>
             </div>
 
             <div className={styles.railFoot}>
@@ -2314,7 +2278,59 @@ function RoomExperience({
                   : `${submittedCount}/${room.players.length} players are correct.`}
               </p>
             </div>
-          </section>
+            </section>
+
+            <section
+              className={`${styles.railBlock} ${styles.lobbyChatBlock} ${styles.liveChatBlock}`}
+              data-testid="chat-panel"
+            >
+              <div className={styles.railHeading}>
+                <span>{copy.feedLabel}</span>
+                <strong>{copy.feedTitle}</strong>
+              </div>
+              <div className={styles.chatScrollWell} ref={chatListRef}>
+                <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list">
+                  {visibleChatFeed.length === 0 ? (
+                    <p className={styles.railBody}>{copy.noChatYet}</p>
+                  ) : (
+                    visibleChatFeed.map((entry) =>
+                      entry.kind === "system" ? (
+                        <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
+                          <span>{getSystemChatMessage(entry, locale)}</span>
+                        </div>
+                      ) : (
+                        <div className={styles.chatLine} key={entry.id}>
+                          <strong>{entry.playerName}</strong>
+                          <span>{entry.text}</span>
+                        </div>
+                      )
+                    )
+                  )}
+                </div>
+              </div>
+
+              <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+                <input
+                  ref={chatInputRef}
+                  data-testid="chat-input"
+                  maxLength={180}
+                  onChange={(event) => setChatDraft(event.target.value)}
+                  placeholder={copy.chatPlaceholder}
+                  type="text"
+                  value={chatDraft}
+                />
+                <button
+                  className={styles.primaryAction}
+                  data-testid="chat-send-button"
+                  disabled={!chatDraft.trim() || isSendingChat}
+                  type="submit"
+                >
+                  {isSendingChat ? copy.sendingChat : copy.sendChat}
+                </button>
+              </form>
+              <p className={styles.compactHint}>{copy.feedHint}</p>
+            </section>
+          </>
         )}
       </aside>
 
@@ -3347,7 +3363,7 @@ function getRecentChatByPlayer(chatFeed: RoomSnapshot["chatFeed"], now: number) 
 
   for (let index = chatFeed.length - 1; index >= 0; index -= 1) {
     const entry = chatFeed[index];
-    if (!entry) {
+    if (!entry || entry.kind !== "player" || !entry.playerId) {
       continue;
     }
 
@@ -3361,6 +3377,26 @@ function getRecentChatByPlayer(chatFeed: RoomSnapshot["chatFeed"], now: number) 
   }
 
   return bubbles;
+}
+
+function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: Locale) {
+  if (entry.systemKey === "match-started") {
+    return locale === "ko" ? "<게임이 시작되었습니다>" : "<Match started>";
+  }
+
+  if (entry.systemKey === "player-correct") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 정답을 맞췄습니다.`
+      : `${entry.playerName ?? "A player"} answered correctly.`;
+  }
+
+  if (entry.systemKey === "player-wrong") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 오답을 제시했습니다.\n[입력 값 : ${entry.answerText ?? "-"}]`
+      : `${entry.playerName ?? "A player"} submitted a wrong answer.\n[Input: ${entry.answerText ?? "-"}]`;
+  }
+
+  return entry.text;
 }
 
 function formatClock(totalMs: number, locale: Locale) {
