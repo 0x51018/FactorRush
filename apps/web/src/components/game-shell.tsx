@@ -97,6 +97,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const [createMode, setCreateMode] = useState<GameMode>("factor");
   const [settingsDraft, setSettingsDraft] = useState<LobbySettings>(DEFAULT_LOBBY_SETTINGS);
   const [answerDraft, setAnswerDraft] = useState("");
+  const [lastSubmittedAnswer, setLastSubmittedAnswer] = useState("");
   const [feedback, setFeedback] = useState("");
   const [busyState, setBusyState] = useState<BusyState>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -303,6 +304,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   useEffect(() => {
     setAnswerDraft("");
+    setLastSubmittedAnswer("");
   }, [room?.round?.roundNumber, room?.phase]);
 
   useEffect(() => {
@@ -643,6 +645,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
 
     const submittedAnswer = answerDraft;
+    setLastSubmittedAnswer(submittedAnswer);
     setAnswerDraft("");
     setBusyState("submit");
 
@@ -902,6 +905,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             settingsDraft={settingsDraft}
             busyState={busyState}
             answerDraft={answerDraft}
+            lastSubmittedAnswer={lastSubmittedAnswer}
             now={now}
             roundRemainingSeconds={roundRemainingSeconds}
             progressRatio={progressRatio}
@@ -1196,6 +1200,7 @@ interface RoomExperienceProps {
   settingsDraft: LobbySettings;
   busyState: BusyState;
   answerDraft: string;
+  lastSubmittedAnswer: string;
   now: number;
   roundRemainingSeconds: number;
   progressRatio: number;
@@ -1229,6 +1234,7 @@ function RoomExperience({
   settingsDraft,
   busyState,
   answerDraft,
+  lastSubmittedAnswer,
   now,
   roundRemainingSeconds,
   progressRatio,
@@ -1290,6 +1296,7 @@ function RoomExperience({
   const connectedPlayers = room.players.filter((candidate) => candidate.connected);
   const connectedGuests = connectedPlayers.filter((candidate) => !candidate.isHost);
   const connectedSpectators = room.spectators.filter((candidate) => candidate.connected);
+  const hostPlayer = room.players.find((candidate) => candidate.isHost) ?? null;
   const readyCount = connectedGuests.filter((candidate) => candidate.isReady).length;
   const allReady = connectedGuests.length === 0 || readyCount === connectedGuests.length;
   const roundTransitionSeconds =
@@ -1328,7 +1335,6 @@ function RoomExperience({
   const isGoldenBellSettings =
     settingsDraft.mode === "factor" && settingsDraft.factorResolutionMode === "golden-bell";
   const visibleChatFeed = room.chatFeed.slice(-MAX_VISIBLE_CHAT_MESSAGES);
-  const recentChatByPlayer = getRecentChatByPlayer(room.chatFeed, now);
   const isGoldenBellRound =
     room.phase === "round-active" &&
     room.round?.mode === "factor" &&
@@ -1720,64 +1726,86 @@ function RoomExperience({
               </div>
 
               <div className={styles.rosterArena}>
-                {room.players.map((candidate, index) => (
-                  <article
-                    className={styles.playerPod}
-                    data-host={candidate.isHost}
-                    data-me={candidate.id === playerId}
-                    data-offline={!candidate.connected}
-                    key={candidate.id}
-                  >
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    {candidate.id === playerId && isRenamingPlayer ? (
-                      <form
-                        className={styles.playerNameForm}
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          handlePlayerNameCommit();
-                        }}
-                      >
-                        <input
-                          ref={playerNameInputRef}
-                          className={styles.playerNameInput}
-                          data-testid="player-name-input"
-                          onBlur={handlePlayerNameCommit}
-                          onChange={(event) => setPlayerNameDraft(event.target.value)}
-                          value={playerNameDraft}
-                        />
-                      </form>
-                    ) : candidate.id === playerId ? (
-                      <button
-                        className={styles.playerNameButton}
-                        data-testid="player-name-button"
-                        onClick={() => setIsRenamingPlayer(true)}
-                        type="button"
-                      >
-                        {candidate.name}
-                      </button>
-                    ) : (
-                      <strong>{candidate.name}</strong>
-                    )}
-                    <p>{getLobbyPlayerNote(locale, candidate.isHost, candidate.connected, candidate.isReady)}</p>
-                    <div className={styles.podScore}>
-                      {candidate.isHost ? (
-                        <small className={styles.hostBadge}>{copy.hostSuffix}</small>
+                <div className={styles.rosterGrid}>
+                  {room.players.map((candidate, index) => (
+                    <article
+                      className={styles.playerPod}
+                      data-host={candidate.isHost}
+                      data-me={candidate.id === playerId}
+                      data-offline={!candidate.connected}
+                      key={candidate.id}
+                    >
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      {candidate.id === playerId && isRenamingPlayer ? (
+                        <form
+                          className={styles.playerNameForm}
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            handlePlayerNameCommit();
+                          }}
+                        >
+                          <input
+                            ref={playerNameInputRef}
+                            className={styles.playerNameInput}
+                            data-testid="player-name-input"
+                            onBlur={handlePlayerNameCommit}
+                            onChange={(event) => setPlayerNameDraft(event.target.value)}
+                            value={playerNameDraft}
+                          />
+                        </form>
+                      ) : candidate.id === playerId ? (
+                        <button
+                          className={styles.playerNameButton}
+                          data-testid="player-name-button"
+                          onClick={() => setIsRenamingPlayer(true)}
+                          type="button"
+                        >
+                          {candidate.name}
+                        </button>
                       ) : (
-                        <small>{candidate.isReady ? getReadyBadge(locale) : getNotReadyBadge(locale)}</small>
+                        <strong>{candidate.name}</strong>
                       )}
-                      {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
-                    </div>
-                    {isHost && candidate.id !== playerId && candidate.connected ? (
-                      <button
-                        className={styles.miniAction}
-                        onClick={() => onTransferHost(candidate.id)}
-                        type="button"
-                      >
-                        {copy.transferHost}
-                      </button>
-                    ) : null}
-                  </article>
-                ))}
+                      <p>{getLobbyPlayerNote(locale, candidate.isHost, candidate.connected, candidate.isReady)}</p>
+                      <div className={styles.podScore}>
+                        {candidate.isHost ? (
+                          <small className={styles.hostBadge}>{copy.hostSuffix}</small>
+                        ) : (
+                          <small>{candidate.isReady ? getReadyBadge(locale) : getNotReadyBadge(locale)}</small>
+                        )}
+                        {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
+                      </div>
+                      {isHost && candidate.id !== playerId && candidate.connected ? (
+                        <button
+                          className={styles.miniAction}
+                          onClick={() => onTransferHost(candidate.id)}
+                          type="button"
+                        >
+                          {copy.transferHost}
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+                <div className={styles.rosterBench}>
+                  <div className={styles.rosterBenchCell}>
+                    <span>{locale === "ko" ? "호스트" : "host"}</span>
+                    <strong>{hostPlayer?.name ?? "—"}</strong>
+                  </div>
+                  <div className={styles.rosterBenchCell}>
+                    <span>{locale === "ko" ? "준비" : "ready"}</span>
+                    <strong>
+                      {connectedGuests.length === 0
+                        ? locale === "ko"
+                          ? "대기 없음"
+                          : "no guests"
+                        : `${readyCount}/${connectedGuests.length}`}
+                    </strong>
+                  </div>
+                  <div className={styles.rosterBenchCell}>
+                    <span>{locale === "ko" ? "관전자" : "spectators"}</span>
+                    <strong>{connectedSpectators.length}</strong>
+                  </div>
+                </div>
               </div>
 
               {room.spectators.length > 0 ? (
@@ -1992,7 +2020,7 @@ function RoomExperience({
                     </div>
                   </div>
                 ) : (
-                  <form className={styles.answerPanel} onSubmit={onSubmitAnswer}>
+                  <form className={`${styles.answerPanel} ${styles.answerConsole}`} onSubmit={onSubmitAnswer}>
                     <label className={styles.field}>
                       <span className={styles.fieldLabelLine}>
                         {copy.answerInputLabel}
@@ -2004,6 +2032,18 @@ function RoomExperience({
                         ref={answerInputRef}
                         data-testid="answer-input"
                         onChange={(event) => onAnswerDraftChange(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "ArrowUp" && lastSubmittedAnswer) {
+                            event.preventDefault();
+                            onAnswerDraftChange(lastSubmittedAnswer);
+                            window.requestAnimationFrame(() => {
+                              answerInputRef.current?.setSelectionRange(
+                                lastSubmittedAnswer.length,
+                                lastSubmittedAnswer.length
+                              );
+                            });
+                          }
+                        }}
                         onPaste={(event) => event.preventDefault()}
                         placeholder={
                           room.settings.mode === "factor"
@@ -2048,6 +2088,22 @@ function RoomExperience({
                       >
                         {busyState === "submit" ? copy.checkingAnswer : copy.submitAnswer}
                       </button>
+                    </div>
+                    <div className={styles.consoleBench}>
+                      <div className={styles.consoleBenchCell}>
+                        <span>{locale === "ko" ? "모드" : "mode"}</span>
+                        <strong>{getModeLabelByLocale(locale, room.settings.mode)}</strong>
+                      </div>
+                      <div className={styles.consoleBenchCell}>
+                        <span>{locale === "ko" ? "최근 제출" : "last submit"}</span>
+                        <strong>{lastSubmittedAnswer || "—"}</strong>
+                      </div>
+                      <div className={styles.consoleBenchCell}>
+                        <span>{locale === "ko" ? "입력 규칙" : "input"}</span>
+                        <strong>
+                          {locale === "ko" ? "붙여넣기 비활성 · ↑ 이전 답안" : "paste off · ↑ recall"}
+                        </strong>
+                      </div>
                     </div>
                   </form>
                 )
@@ -2190,14 +2246,14 @@ function RoomExperience({
             </section>
           </>
         ) : (
-          <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
-            <div className={styles.railHeading}>
-              <span>{copy.liveBoardLabel}</span>
-              <strong>{copy.liveBoardTitle}</strong>
-            </div>
-            <p className={styles.railBody}>{copy.liveBoardBody}</p>
+          <>
+            <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
+              <div className={styles.railHeading}>
+                <span>{copy.liveBoardLabel}</span>
+                <strong>{copy.liveBoardTitle}</strong>
+              </div>
+              <p className={styles.railBody}>{copy.liveBoardBody}</p>
 
-            <div className={styles.liveRailContent}>
               <div className={styles.leaderboardSection}>
                 <div className={styles.leaderboard} data-testid="leaderboard">
                   {sortedPlayers.map((candidate, index) => {
@@ -2226,19 +2282,6 @@ function RoomExperience({
                         <div className={styles.leaderRowScore}>
                           <strong>{candidate.score}</strong>
                         </div>
-
-                        {room.phase === "round-active" &&
-                        status?.lastSubmissionKind &&
-                        !status.hasSubmitted &&
-                        status.lastSubmissionText ? (
-                          <div className={styles.leaderBubble} data-kind={status.lastSubmissionKind}>
-                            {status.lastSubmissionText}
-                          </div>
-                        ) : room.phase === "round-active" && recentChatByPlayer.get(candidate.id) ? (
-                          <div className={styles.leaderBubble} data-kind="chat">
-                            {recentChatByPlayer.get(candidate.id)?.text}
-                          </div>
-                        ) : null}
                       </div>
                     );
                   })}
@@ -2266,55 +2309,55 @@ function RoomExperience({
                 ) : null}
               </div>
 
-              <section className={styles.liveChatDock} data-testid="chat-panel">
-                <div className={styles.railHeading}>
-                  <span>{copy.feedLabel}</span>
-                  <strong>{copy.feedTitle}</strong>
-                </div>
-                <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list" ref={chatListRef}>
-                  {visibleChatFeed.length === 0 ? (
-                    <p className={styles.railBody}>{copy.noChatYet}</p>
-                  ) : (
-                    visibleChatFeed.map((entry) => (
-                      <div className={styles.chatLine} key={entry.id}>
-                        <strong>{entry.playerName}</strong>
-                        <span>{entry.text}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
+              <div className={styles.railFoot}>
+                <p className={styles.compactHint}>
+                  {locale === "ko"
+                    ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
+                    : `${submittedCount}/${room.players.length} players are correct.`}
+                </p>
+              </div>
+            </section>
 
-                <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
-                  <input
-                    ref={chatInputRef}
-                    data-testid="chat-input"
-                    maxLength={180}
-                    onChange={(event) => setChatDraft(event.target.value)}
-                    placeholder={copy.chatPlaceholder}
-                    type="text"
-                    value={chatDraft}
-                  />
-                  <button
-                    className={styles.primaryAction}
-                    data-testid="chat-send-button"
-                    disabled={!chatDraft.trim() || isSendingChat}
-                    type="submit"
-                  >
-                    {isSendingChat ? copy.sendingChat : copy.sendChat}
-                  </button>
-                </form>
-                <p className={styles.compactHint}>{copy.feedHint}</p>
-              </section>
-            </div>
+            <section className={styles.liveChatDock} data-testid="chat-panel">
+              <div className={styles.railHeading}>
+                <span>{copy.feedLabel}</span>
+                <strong>{copy.feedTitle}</strong>
+              </div>
+              <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list" ref={chatListRef}>
+                {visibleChatFeed.length === 0 ? (
+                  <p className={styles.railBody}>{copy.noChatYet}</p>
+                ) : (
+                  visibleChatFeed.map((entry) => (
+                    <div className={styles.chatLine} key={entry.id}>
+                      <strong>{entry.playerName}</strong>
+                      <span>{entry.text}</span>
+                    </div>
+                  ))
+                )}
+              </div>
 
-            <div className={styles.railFoot}>
-              <p className={styles.compactHint}>
-                {locale === "ko"
-                  ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
-                  : `${submittedCount}/${room.players.length} players are correct.`}
-              </p>
-            </div>
-          </section>
+              <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+                <input
+                  ref={chatInputRef}
+                  data-testid="chat-input"
+                  maxLength={180}
+                  onChange={(event) => setChatDraft(event.target.value)}
+                  placeholder={copy.chatPlaceholder}
+                  type="text"
+                  value={chatDraft}
+                />
+                <button
+                  className={styles.primaryAction}
+                  data-testid="chat-send-button"
+                  disabled={!chatDraft.trim() || isSendingChat}
+                  type="submit"
+                >
+                  {isSendingChat ? copy.sendingChat : copy.sendChat}
+                </button>
+              </form>
+              <p className={styles.compactHint}>{copy.feedHint}</p>
+            </section>
+          </>
         )}
       </aside>
 
@@ -2322,37 +2365,56 @@ function RoomExperience({
         <div className={styles.screenOverlay} data-phase="reveal">
           <div className={styles.screenOverlayScrim} />
           <section className={`${styles.screenCard} ${styles.screenCardNarrow}`} data-testid="round-reveal-panel">
-            <div className={styles.screenHero}>
-              <span className={styles.challengeLabel}>{copy.answerRevealLabel}</span>
-              <h3>{roundCopy?.prompt}</h3>
-              <p>
-                {locale === "ko"
-                  ? `${roundTransitionSeconds}${copy.secondsUnit} 뒤 자동으로 ${
-                      room.completedRounds >= room.settings.roundCount ? "결과 화면" : "다음 라운드"
-                    }로 넘어갑니다.`
-                  : `Automatically moving in ${roundTransitionSeconds}s.`}
-              </p>
+            <div className={styles.screenHeaderGrid}>
+              <div className={styles.screenHero}>
+                <span className={styles.challengeLabel}>{copy.answerRevealLabel}</span>
+                <h3>{roundCopy?.prompt}</h3>
+                <p>
+                  {locale === "ko"
+                    ? `${roundTransitionSeconds}${copy.secondsUnit} 뒤 자동으로 ${
+                        room.completedRounds >= room.settings.roundCount ? "결과 화면" : "다음 라운드"
+                      }로 넘어갑니다.`
+                    : `Automatically moving in ${roundTransitionSeconds}s.`}
+                </p>
+              </div>
+
+              <div className={styles.screenMetaStrip} data-columns="2">
+                <div className={styles.screenMetaChip}>
+                  <span>{locale === "ko" ? "라운드" : "round"}</span>
+                  <strong>
+                    {room.round.roundNumber}/{room.settings.roundCount}
+                  </strong>
+                </div>
+                <div className={styles.screenMetaChip}>
+                  <span>{locale === "ko" ? "전환 대상" : "transition"}</span>
+                  <strong>
+                    {room.completedRounds >= room.settings.roundCount
+                      ? locale === "ko"
+                        ? "최종 결과"
+                        : "results"
+                      : locale === "ko"
+                        ? "다음 라운드"
+                        : "next round"}
+                  </strong>
+                </div>
+              </div>
             </div>
 
-            <div className={styles.screenAnswerBlock}>
-              <span>{locale === "ko" ? "정답" : "Answer"}</span>
-              <strong>{room.round.revealedAnswer ?? "-"}</strong>
-            </div>
+            <div className={styles.revealConsole}>
+              <div className={styles.screenAnswerBlock}>
+                <span>{locale === "ko" ? "정답" : "Answer"}</span>
+                <strong>{room.round.revealedAnswer ?? "-"}</strong>
+              </div>
 
-            <div className={`${styles.overlayStatRow} ${styles.overlayStatRowCompact}`}>
-              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{locale === "ko" ? "라운드" : "round"}</span>
-                <strong>
-                  {room.round.roundNumber}/{room.settings.roundCount}
-                </strong>
-              </div>
-              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{revealSummary.label}</span>
-                <strong>{revealSummary.value}</strong>
-              </div>
-              <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{locale === "ko" ? "점수 변동" : "score swing"}</span>
-                <strong>{revealDeltaRange}</strong>
+              <div className={`${styles.overlayStatRow} ${styles.overlayStatRowCompact} ${styles.revealStatGrid}`}>
+                <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
+                  <span>{revealSummary.label}</span>
+                  <strong>{revealSummary.value}</strong>
+                </div>
+                <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
+                  <span>{locale === "ko" ? "점수 변동" : "score swing"}</span>
+                  <strong>{revealDeltaRange}</strong>
+                </div>
               </div>
             </div>
 
@@ -2396,32 +2458,34 @@ function RoomExperience({
         <div className={styles.screenOverlay} data-phase="results">
           <div className={styles.screenOverlayScrim} />
           <section className={`${styles.screenCard} ${styles.screenCardWide}`}>
-            <div className={styles.screenHero}>
-              <span className={styles.challengeLabel}>{copy.resultsLabel}</span>
-              <h3>{copy.resultsTitle}</h3>
-              <p>{copy.resultsBody}</p>
+            <div className={styles.screenHeaderGrid}>
+              <div className={styles.screenHero}>
+                <span className={styles.challengeLabel}>{copy.resultsLabel}</span>
+                <h3>{copy.resultsTitle}</h3>
+                <p>{copy.resultsBody}</p>
+              </div>
+
+              <div className={styles.screenMetaStrip} data-columns="3">
+                <div className={styles.screenMetaChip}>
+                  <span>{copy.resultsWinnerLabel}</span>
+                  <strong>{winnerNames || sortedPlayers[0]?.name || "-"}</strong>
+                </div>
+                <div className={styles.screenMetaChip}>
+                  <span>{copy.roundCountField}</span>
+                  <strong>
+                    {room.settings.roundCount} {copy.roundsUnit}
+                  </strong>
+                </div>
+                <div className={styles.screenMetaChip}>
+                  <span>{locale === "ko" ? "총 시간" : "total time"}</span>
+                  <strong data-testid="results-total-time">
+                    {formatClock(room.totalMatchDurationMs, locale)}
+                  </strong>
+                </div>
+              </div>
             </div>
 
-            <div className={styles.overlayStatRow}>
-              <div className={styles.statusNode}>
-                <span>{copy.resultsWinnerLabel}</span>
-                <strong>{winnerNames || sortedPlayers[0]?.name || "-"}</strong>
-              </div>
-              <div className={styles.statusNode}>
-                <span>{copy.roundCountField}</span>
-                <strong>
-                  {room.settings.roundCount} {copy.roundsUnit}
-                </strong>
-              </div>
-              <div className={styles.statusNode}>
-                <span>{locale === "ko" ? "총 시간" : "total time"}</span>
-                <strong data-testid="results-total-time">
-                  {formatClock(room.totalMatchDurationMs, locale)}
-                </strong>
-              </div>
-            </div>
-
-              <div className={styles.overlayResultsLayout}>
+            <div className={styles.overlayResultsLayout}>
               <div className={styles.podiumDeck}>
                 {podiumPlayers.map((candidate, index) => (
                   <article className={styles.podiumCard} data-rank={index + 1} key={candidate.id}>
@@ -2498,6 +2562,7 @@ function RoomExperience({
               </div>
               <button
                 className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
+                data-testid="settings-close-button"
                 onClick={() => setIsSettingsOpen(false)}
                 type="button"
               >
@@ -2784,6 +2849,7 @@ function RoomExperience({
               </div>
               <button
                 className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
+                data-testid="rules-close-button"
                 onClick={() => setIsRulesOpen(false)}
                 type="button"
               >
@@ -2829,6 +2895,7 @@ function RoomExperience({
               </div>
               <button
                 className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
+                data-testid="score-guide-close-button"
                 onClick={() => setIsScoreGuideOpen(false)}
                 type="button"
               >
@@ -3339,28 +3406,6 @@ function getBaseScoreFormulaLatex() {
   const fallbackRank = SCORE_BASE_POINTS_BY_RANK.length + 1;
 
   return `\\operatorname{base}(r)=\\begin{cases}${cases}\\\\${SCORE_FALLBACK_POINTS},&r\\ge ${fallbackRank}\\end{cases}`;
-}
-
-function getRecentChatByPlayer(chatFeed: RoomSnapshot["chatFeed"], now: number) {
-  const bubbles = new Map<string, RoomSnapshot["chatFeed"][number]>();
-  const cutoff = now - 4500;
-
-  for (let index = chatFeed.length - 1; index >= 0; index -= 1) {
-    const entry = chatFeed[index];
-    if (!entry) {
-      continue;
-    }
-
-    if (entry.createdAt < cutoff) {
-      break;
-    }
-
-    if (!bubbles.has(entry.playerId)) {
-      bubbles.set(entry.playerId, entry);
-    }
-  }
-
-  return bubbles;
 }
 
 function formatClock(totalMs: number, locale: Locale) {
