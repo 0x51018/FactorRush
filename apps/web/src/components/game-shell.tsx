@@ -73,6 +73,7 @@ type BusyState =
   | "create"
   | "join"
   | "leave"
+  | "kick"
   | "settings"
   | "start"
   | "claim"
@@ -155,30 +156,44 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   useEffect(() => {
     const socket = getSharedSocket();
+    const connectListener = () => {
+      setIsConnected(true);
+    };
+    const disconnectListener = () => {
+      setIsConnected(false);
+    };
     const roomStateListener = (nextRoom: RoomSnapshot) => {
       startTransition(() => {
         setRoom(nextRoom);
       });
     };
+    const kickedListener = ({ roomId }: { roomId: string }) => {
+      clearRoomSession(roomId);
+      resetLocalRoomState(roomId);
+      setBusyState(null);
+      setFeedback(
+        locale === "ko" ? "방장에 의해 방에서 추방되었습니다." : "The host removed you from the room."
+      );
+    };
 
     socketRef.current = socket;
-    socket.on("connect", () => {
-      setIsConnected(true);
-    });
-    socket.on("disconnect", () => {
-      setIsConnected(false);
-    });
+    socket.on("connect", connectListener);
+    socket.on("disconnect", disconnectListener);
     socket.on("room:state", roomStateListener);
+    socket.on("room:kicked", kickedListener);
     if (latestSharedRoomState && (!initialRoomId || latestSharedRoomState.roomId === initialRoomId)) {
       setRoom(latestSharedRoomState);
     }
     socket.connect();
 
     return () => {
+      socket.off("connect", connectListener);
+      socket.off("disconnect", disconnectListener);
       socket.off("room:state", roomStateListener);
+      socket.off("room:kicked", kickedListener);
       socketRef.current = null;
     };
-  }, [initialRoomId]);
+  }, [initialRoomId, locale]);
 
   useEffect(() => {
     setRoomCode(initialRoomId ?? "");
@@ -372,6 +387,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     if (
       room.messageKey !== "settings-updated" &&
       room.messageKey !== "settings-updated-reset-ready" &&
+      room.messageKey !== "player-kicked" &&
       room.messageKey !== "player-left" &&
       room.messageKey !== "host-transferred"
     ) {
@@ -380,6 +396,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
     if (
       room.phase !== "lobby" &&
+      room.messageKey !== "player-kicked" &&
       room.messageKey !== "player-left" &&
       room.messageKey !== "host-transferred"
     ) {
@@ -530,6 +547,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   const navigateToRoom = (roomId: string) => {
     router.push(createInvitePath(roomId));
+  };
+
+  const resetLocalRoomState = (nextRoomCode = "") => {
+    latestSharedRoomState = null;
+    setRoom(null);
+    setPlayerId(null);
+    setMemberRole(null);
+    setAnswerDraft("");
+    setRoomCode(nextRoomCode);
   };
 
   const commitDisplayName = (value: string) => {
@@ -740,12 +766,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     try {
       await emitWithAck<null>("room:leave", { roomId: room.roomId });
       clearRoomSession(room.roomId);
-      latestSharedRoomState = null;
-      setRoom(null);
-      setPlayerId(null);
-      setMemberRole(null);
-      setAnswerDraft("");
-      setRoomCode("");
+      resetLocalRoomState();
       router.push("/");
     } catch (error) {
       setFeedback(getErrorMessage(error, locale));
@@ -914,6 +935,25 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
   };
 
+  const handleKickPlayer = async (targetPlayerId: string) => {
+    if (!room) {
+      return;
+    }
+
+    setBusyState("kick");
+
+    try {
+      await emitWithAck<null>("room:kick-player", {
+        roomId: room.roomId,
+        playerId: targetPlayerId
+      });
+    } catch (error) {
+      setFeedback(getErrorMessage(error, locale));
+    } finally {
+      setBusyState(null);
+    }
+  };
+
   const handleSendChat = async (text: string) => {
     if (!room) {
       return false;
@@ -1054,6 +1094,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             onBecomePlayer={handleBecomePlayer}
             onSetReady={handleSetReady}
             onTransferHost={handleTransferHost}
+            onKickPlayer={handleKickPlayer}
             onStartGame={handleStartGame}
             onAdvanceRound={handleAdvanceRound}
             onResetRoom={handleResetRoom}
@@ -1429,6 +1470,7 @@ interface RoomExperienceProps {
   onBecomePlayer: () => void;
   onSetReady: (isReady: boolean) => void;
   onTransferHost: (playerId: string) => void;
+  onKickPlayer: (playerId: string) => void;
   onStartGame: () => void;
   onAdvanceRound: () => void;
   onResetRoom: () => void;
@@ -1465,6 +1507,7 @@ function RoomExperience({
   onBecomePlayer,
   onSetReady,
   onTransferHost,
+  onKickPlayer,
   onStartGame,
   onAdvanceRound,
   onResetRoom,
@@ -2046,6 +2089,7 @@ function RoomExperience({
                       data-host={candidate.isHost}
                       data-me={candidate.id === playerId}
                       data-offline={!candidate.connected}
+                      data-testid="player-pod"
                       key={candidate.id}
                     >
                       <span>{String(index + 1).padStart(2, "0")}</span>
@@ -2091,13 +2135,29 @@ function RoomExperience({
                         {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
                       </div>
                       {isHost && candidate.id !== playerId && candidate.connected ? (
-                        <button
-                          className={styles.miniAction}
-                          onClick={() => onTransferHost(candidate.id)}
-                          type="button"
-                        >
-                          {copy.transferHost}
-                        </button>
+                        <div className={styles.playerPodActions}>
+                          <button
+                            className={styles.miniAction}
+                            disabled={busyState === "kick"}
+                            onClick={() => onTransferHost(candidate.id)}
+                            type="button"
+                          >
+                            {copy.transferHost}
+                          </button>
+                          <button
+                            aria-label={
+                              locale === "ko" ? `${candidate.name} 추방` : `Kick ${candidate.name}`
+                            }
+                            className={styles.miniAction}
+                            data-testid="kick-player-button"
+                            data-tone="danger"
+                            disabled={busyState === "kick"}
+                            onClick={() => onKickPlayer(candidate.id)}
+                            type="button"
+                          >
+                            {busyState === "kick" ? copy.kickingPlayer : copy.kickPlayer}
+                          </button>
+                        </div>
                       ) : null}
                     </article>
                   ) : (
@@ -3866,6 +3926,12 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko" ? "<새 라운드가 시작되었습니다>" : "<New round started>";
   }
 
+  if (entry.systemKey === "player-joined") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 참가했습니다.`
+      : `${entry.playerName ?? "A player"} joined the room.`;
+  }
+
   if (entry.systemKey === "player-correct") {
     return locale === "ko"
       ? `${entry.playerName ?? "플레이어"}님이 정답을 맞췄습니다.`
@@ -3882,6 +3948,12 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko"
       ? `${entry.playerName ?? "관전자"}님이 관전자로 들어왔습니다.`
       : `${entry.playerName ?? "A spectator"} joined as a spectator.`;
+  }
+
+  if (entry.systemKey === "player-kicked") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 방에서 추방되었습니다.`
+      : `${entry.playerName ?? "A player"} was removed from the room.`;
   }
 
   if (entry.systemKey === "player-left") {
@@ -4063,9 +4135,17 @@ function getErrorMessage(error: unknown, locale: Locale) {
       ko: "방 이름 변경은 방장만 할 수 있습니다.",
       en: "Only the host can rename the room."
     },
+    "Only the host can remove players from the room.": {
+      ko: "플레이어 추방은 방장만 할 수 있습니다.",
+      en: "Only the host can remove players from the room."
+    },
     "You can rename the room in the lobby only.": {
       ko: "방 이름은 로비에서만 변경할 수 있습니다.",
       en: "You can rename the room in the lobby only."
+    },
+    "Player removal is only available in the lobby.": {
+      ko: "플레이어 추방은 로비에서만 가능합니다.",
+      en: "Player removal is only available in the lobby."
     },
     "Ready state is only available in the lobby.": {
       ko: "준비 상태는 로비에서만 바꿀 수 있습니다.",
@@ -4118,6 +4198,10 @@ function getErrorMessage(error: unknown, locale: Locale) {
     "Your seat in this room is no longer available.": {
       ko: "이 방에서 기존 자리를 더 이상 사용할 수 없습니다.",
       en: "Your seat in this room is no longer available."
+    },
+    "Choose another connected player to remove from the room.": {
+      ko: "다른 접속 중인 플레이어를 선택해 추방해 주세요.",
+      en: "Choose another connected player to remove from the room."
     },
     "실시간 연결이 아직 준비되지 않았습니다.": {
       ko: "실시간 연결이 아직 준비되지 않았습니다.",

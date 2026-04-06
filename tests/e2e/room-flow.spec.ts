@@ -181,6 +181,7 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await guestPage.getByTestId("invite-join-button").click();
   await expect(guestPage.getByTestId("ready-button")).toBeVisible();
   await expect(hostPage.locator("body")).toContainText("GuestBeta");
+  await expect(hostPage.getByTestId("lobby-chat-list")).toContainText("GuestBeta joined the room.");
 
   await guestPage.getByTestId("player-name-button").click();
   await guestPage.getByTestId("player-name-input").fill("GuestNova");
@@ -659,6 +660,33 @@ test("players can leave from the lobby and return to the main screen", async ({ 
   await guestPage.getByTestId("leave-room-button").click();
   await expect(guestPage.getByTestId("create-room-button")).toBeVisible({ timeout: 10_000 });
   await expect(hostPage.locator("body")).toContainText("LeaveGuest left the room.");
+
+  await hostContext.close();
+  await guestContext.close();
+});
+
+test("host can kick another player from the lobby", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("KickHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("invite-name-input")).toBeVisible();
+  await guestPage.getByTestId("invite-name-input").fill("KickGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await expect(guestPage.getByTestId("leave-room-button")).toBeVisible();
+
+  const guestPod = hostPage.getByTestId("player-pod").filter({ hasText: "KickGuest" });
+  await guestPod.getByTestId("kick-player-button").click();
+
+  await expect(guestPage.getByTestId("invite-name-input")).toBeVisible({ timeout: 10_000 });
+  await expect(hostPage.locator("body")).toContainText("KickGuest was removed from the room.");
 
   await hostContext.close();
   await guestContext.close();

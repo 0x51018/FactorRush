@@ -126,6 +126,8 @@ const COPY = {
     leaveRoom: "방 나가기",
     leavingRoom: "나가는 중..",
     transferHost: "방장 위임",
+    kickPlayer: "추방",
+    kickingPlayer: "추방 중...",
     renameNickname: "닉네임 변경",
     liveBoardLabel: "실시간 대결",
     liveBoardTitle: "진행 보드",
@@ -329,6 +331,8 @@ const COPY = {
     leaveRoom: "Leave room",
     leavingRoom: "Leaving...",
     transferHost: "Transfer host",
+    kickPlayer: "Kick",
+    kickingPlayer: "Kicking...",
     renameNickname: "Rename nickname",
     liveBoardLabel: "Live race",
     liveBoardTitle: "Progress board",
@@ -621,6 +625,7 @@ export function getRoomMessageByLocale(
       "match-cap-reached": "매치가 1시간 상한에 도달해 현재 점수 기준으로 종료되었습니다.",
       "reset-lobby": "로비로 돌아왔습니다. 설정을 바꾸거나 다시 시작할 수 있습니다.",
       "host-transferred": `${actor}님이 새로운 방장이 되었습니다.`,
+      "player-kicked": `${actor}님이 방에서 추방되었습니다.`,
       "player-left": `${actor}님이 방을 나갔습니다.`
     },
     en: {
@@ -643,6 +648,7 @@ export function getRoomMessageByLocale(
       "match-cap-reached": "The match hit the one-hour cap and ended on the current scores.",
       "reset-lobby": "Back in the lobby. Adjust the settings or start again.",
       "host-transferred": `${actor} is now the host.`,
+      "player-kicked": `${actor} was removed from the room.`,
       "player-left": `${actor} left the room.`
     }
   } as const;

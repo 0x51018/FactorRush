@@ -1055,7 +1055,7 @@
 .rosterArena {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(14.75rem, 14.75rem));
-  grid-auto-rows: 8.8rem;
+  grid-auto-rows: minmax(10rem, auto);
   gap: 0.92rem;
   align-content: start;
   justify-content: start;
@@ -1154,7 +1154,7 @@
 }
 
 .playerPod {
-  min-height: 8.8rem;
+  min-height: 10rem;
   height: 100%;
   padding: 0.92rem;
   display: grid;
@@ -1191,7 +1191,8 @@
 .playerPod strong {
   display: -webkit-box;
   font-size: 1rem;
-  line-height: 1.24;
+  line-height: 1.3;
+  min-height: calc(1rem * 1.3 * 2);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   white-space: normal;
@@ -1215,7 +1216,8 @@
 .playerNameButton {
   display: -webkit-box;
   cursor: pointer;
-  line-height: 1.24;
+  line-height: 1.3;
+  min-height: calc(1rem * 1.3 * 2);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   white-space: normal;
@@ -1226,10 +1228,12 @@
 
 .playerNameForm {
   margin: 0;
+  min-height: calc(1rem * 1.3 * 2);
 }
 
 .playerNameInput {
   width: 100%;
+  line-height: 1.3;
   border-bottom: 1px solid var(--line-strong);
 }
 
@@ -1243,7 +1247,7 @@
 }
 
 .playerPodGhost {
-  min-height: 8.8rem;
+  min-height: 10rem;
   height: 100%;
   grid-template-rows: auto minmax(0, 1fr);
   border-style: dashed;
@@ -1301,6 +1305,28 @@
   border-radius: var(--radius-control);
   box-shadow: var(--shadow-soft);
   font-family: "IBM Plex Mono", monospace;
+}
+
+.playerPodActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.42rem;
+  margin-top: 0.18rem;
+}
+
+.playerPodActions .miniAction {
+  margin-top: 0;
+}
+
+.miniAction:disabled {
+  opacity: 0.68;
+  cursor: not-allowed;
+}
+
+.miniAction[data-tone="danger"] {
+  border-color: rgba(214, 87, 67, 0.24);
+  background: rgba(214, 87, 67, 0.08);
+  color: var(--accent-warm);
 }
 
 .lobbyFoot {

@@ -51,6 +51,7 @@ export type RoomMessageKey =
   | "match-cap-reached"
   | "reset-lobby"
   | "host-transferred"
+  | "player-kicked"
   | "player-left";
 
 export interface LobbySettings {
@@ -190,9 +191,11 @@ export interface ChatMessage {
   systemKey?:
     | "match-started"
     | "round-started"
+    | "player-joined"
     | "player-correct"
     | "player-wrong"
     | "spectator-joined"
+    | "player-kicked"
     | "player-left"
     | "spectator-left"
     | "host-transferred";
@@ -243,6 +246,11 @@ export interface RoomActionRequest {
 }
 
 export interface TransferHostRequest {
+  roomId: string;
+  playerId: string;
+}
+
+export interface KickPlayerRequest {
   roomId: string;
   playerId: string;
 }

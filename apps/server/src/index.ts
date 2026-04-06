@@ -16,6 +16,7 @@ import { Server } from "socket.io";
 import type {
   ClaimAnswerRequest,
   CreateRoomRequest,
+  KickPlayerRequest,
   JoinRoomRequest,
   RenamePlayerRequest,
   RenameRoomRequest,
@@ -115,6 +116,13 @@ io.on("connection", (socket) => {
     "room:transfer-host",
     (payload: TransferHostRequest, callback: (result: SocketAck<unknown>) => void) => {
       callback(roomStore.transferHost(socket, payload));
+    }
+  );
+
+  socket.on(
+    "room:kick-player",
+    (payload: KickPlayerRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.kickPlayer(socket, payload));
     }
   );
 
