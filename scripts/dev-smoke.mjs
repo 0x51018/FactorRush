@@ -41,7 +41,7 @@ async function runPresenceScenario() {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -107,7 +107,7 @@ async function runSpectatorScenario() {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -191,7 +191,7 @@ async function runScenario(mode) {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -221,7 +221,7 @@ async function runScenario(mode) {
           mode: "binary",
           roundCount: 3,
           roundTimeSec: 20,
-          binaryDecimalToBinaryChance: 100
+          baseConversionPair: "2-10"
         }
       });
 
@@ -320,7 +320,7 @@ async function runGoldenBellScenario() {
       (state) => state.phase === "round-active" && state.settings.factorResolutionMode === "golden-bell"
     );
     if (activeState.round?.hasRoundTimer !== true) {
-      throw new Error("골든벨 라운드는 전체 타이머 없이 시작되어야 합니다.");
+      throw new Error("Golden bell round should start with the main timer enabled.");
     }
 
     if (activeState.round?.isMainTimerPaused) {

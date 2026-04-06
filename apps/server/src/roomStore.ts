@@ -942,8 +942,6 @@ export class RoomStore {
       this.clearAnswerWindowTimer(room);
       room.round.answeringPlayerId = null;
       room.round.answerWindowEndsAt = undefined;
-      room.round.isMainTimerPaused = false;
-      room.round.mainTimerRemainingMs = undefined;
     }
 
     const rank = room.round.submissions.length + 1;
@@ -1385,8 +1383,6 @@ export class RoomStore {
     this.clearAnswerWindowTimer(room);
     room.round.answeringPlayerId = null;
     room.round.answerWindowEndsAt = undefined;
-    room.round.isMainTimerPaused = false;
-    room.round.mainTimerRemainingMs = undefined;
 
     const submittedAt = Date.now();
     room.round.attempts.push({
@@ -1650,8 +1646,6 @@ export class RoomStore {
       this.clearAnswerWindowTimer(room);
       room.round.answeringPlayerId = null;
       room.round.answerWindowEndsAt = undefined;
-      room.round.isMainTimerPaused = false;
-      room.round.mainTimerRemainingMs = undefined;
       this.resumeGoldenBellMainTimer(room);
     }
 
