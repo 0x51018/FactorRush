@@ -15,6 +15,7 @@ export const ROOM_IDLE_GRACE_MS = 10 * 60 * 1000;
 export const MAX_PLAYERS_PER_ROOM = 12;
 export const FACTOR_PRIME_SHOUT = "야호 소수다";
 export const CHAT_MESSAGE_MAX_LENGTH = 180;
+export const PLAYER_NAME_MAX_LENGTH = 15;
 export const SCORE_BASE_POINTS_BY_RANK = [120, 90, 70, 55] as const;
 export const SCORE_FALLBACK_POINTS = 40;
 export const SCORE_SPEED_BONUS_PER_SECOND = 2;
@@ -24,7 +25,8 @@ export const MATCH_MAX_DURATION_MS = 60 * 60 * 1000;
 
 export type GameMode = "factor" | "binary";
 export type RoomPhase = "lobby" | "round-active" | "round-ended" | "finished";
-export type BinaryDirection = "decimal-to-binary" | "binary-to-decimal";
+export type ConversionBase = 2 | 10 | 16;
+export type BaseConversionPair = "2-10" | "10-16" | "2-16";
 export type FactorPrimeAnswerMode = "phrase" | "number";
 export type FactorResolutionMode = "all-play" | "first-correct" | "golden-bell";
 export type SubmissionKind = "correct" | "wrong" | "chat";
@@ -55,13 +57,19 @@ export interface LobbySettings {
   mode: GameMode;
   roundCount: number;
   roundTimeSec: number;
-  binaryDecimalToBinaryChance: number;
+  baseConversionPair: BaseConversionPair;
   binaryLivePreview: boolean;
   factorResolutionMode: FactorResolutionMode;
   factorPrimeAnswerMode: FactorPrimeAnswerMode;
   factorOrderedAnswer: boolean;
   factorSingleAttempt: boolean;
+  factorGoldenBellSingleAttempt: boolean;
   factorSuddenDeath: boolean;
+}
+
+export interface MatchSettings {
+  maxPlayers: number;
+  allowMidMatchJoin: boolean;
 }
 
 export interface PlayerSummary {
@@ -106,8 +114,11 @@ export interface RoundSnapshot {
   startedAt: number;
   endsAt: number;
   hasRoundTimer: boolean;
+  isMainTimerPaused?: boolean;
+  mainTimerRemainingMs?: number;
   isSuddenDeath: boolean;
   answeringPlayerId?: string;
+  lastAnsweringPlayerId?: string;
   answerWindowEndsAt?: number;
   transitionEndsAt?: number;
   revealedAnswer?: string;
@@ -120,6 +131,7 @@ export interface RoomSnapshot {
   invitePath: string;
   phase: RoomPhase;
   settings: LobbySettings;
+  matchSettings: MatchSettings;
   players: PlayerSummary[];
   spectators: SpectatorSummary[];
   round: RoundSnapshot | null;
@@ -145,7 +157,9 @@ export interface PrimeFactorChallengeMeta {
 }
 
 export interface BinaryChallengeMeta {
-  direction: BinaryDirection;
+  direction?: "decimal-to-binary" | "binary-to-decimal";
+  sourceBase: ConversionBase;
+  targetBase: ConversionBase;
   sourceValue: string;
   targetValue: string;
 }
@@ -173,7 +187,15 @@ export interface ChatMessage {
   playerId?: string;
   playerName?: string;
   text: string;
-  systemKey?: "match-started" | "player-correct" | "player-wrong";
+  systemKey?:
+    | "match-started"
+    | "round-started"
+    | "player-correct"
+    | "player-wrong"
+    | "spectator-joined"
+    | "player-left"
+    | "spectator-left"
+    | "host-transferred";
   answerText?: string;
   createdAt: number;
 }
@@ -181,6 +203,7 @@ export interface ChatMessage {
 export interface CreateRoomRequest {
   playerName: string;
   settings?: Partial<LobbySettings>;
+  matchSettings?: Partial<MatchSettings>;
 }
 
 export interface JoinRoomRequest {
@@ -193,6 +216,11 @@ export interface JoinRoomRequest {
 export interface UpdateSettingsRequest {
   roomId: string;
   settings: LobbySettings;
+}
+
+export interface UpdateMatchSettingsRequest {
+  roomId: string;
+  matchSettings: MatchSettings;
 }
 
 export interface RenameRoomRequest {
@@ -256,13 +284,19 @@ export const DEFAULT_LOBBY_SETTINGS: LobbySettings = {
   mode: "factor",
   roundCount: 15,
   roundTimeSec: 30,
-  binaryDecimalToBinaryChance: 50,
+  baseConversionPair: "2-10",
   binaryLivePreview: true,
   factorResolutionMode: "all-play",
   factorPrimeAnswerMode: "phrase",
   factorOrderedAnswer: false,
   factorSingleAttempt: false,
+  factorGoldenBellSingleAttempt: false,
   factorSuddenDeath: false
+};
+
+export const DEFAULT_MATCH_SETTINGS: MatchSettings = {
+  maxPlayers: 6,
+  allowMidMatchJoin: false
 };
 
 const FACTOR_PRIMES = [2, 3, 5, 7, 11, 13, 17, 19];
@@ -281,8 +315,13 @@ const SUPERSCRIPT_DIGITS: Record<string, string> = {
 };
 
 export function sanitizePlayerName(input: string) {
-  const trimmed = input.replace(/\s+/g, " ").trim();
-  return trimmed.slice(0, 18);
+  const normalized = input.normalize("NFKC");
+  const withoutControls = normalized.replace(/[\p{C}]/gu, "");
+  const collapsedWhitespace = withoutControls.replace(/\s+/g, " ").trim();
+  const allowedCharactersOnly = [...collapsedWhitespace]
+    .filter((character) => /[\p{L}\p{N} _-]/u.test(character))
+    .join("");
+  return allowedCharactersOnly.slice(0, PLAYER_NAME_MAX_LENGTH);
 }
 
 export function sanitizeRoomId(input: string) {
@@ -298,11 +337,10 @@ export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
     mode: input?.mode === "binary" ? "binary" : "factor",
     roundCount: clampNumber(input?.roundCount ?? DEFAULT_LOBBY_SETTINGS.roundCount, 3, 50),
     roundTimeSec: clampNumber(input?.roundTimeSec ?? DEFAULT_LOBBY_SETTINGS.roundTimeSec, 15, 90),
-    binaryDecimalToBinaryChance: clampNumber(
-      input?.binaryDecimalToBinaryChance ?? DEFAULT_LOBBY_SETTINGS.binaryDecimalToBinaryChance,
-      0,
-      100
-    ),
+    baseConversionPair:
+      input?.baseConversionPair === "10-16" || input?.baseConversionPair === "2-16"
+        ? input.baseConversionPair
+        : DEFAULT_LOBBY_SETTINGS.baseConversionPair,
     binaryLivePreview: input?.binaryLivePreview ?? DEFAULT_LOBBY_SETTINGS.binaryLivePreview,
     factorResolutionMode:
       input?.factorResolutionMode === "first-correct" || input?.factorResolutionMode === "golden-bell"
@@ -311,18 +349,26 @@ export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
     factorPrimeAnswerMode: input?.factorPrimeAnswerMode === "number" ? "number" : "phrase",
     factorOrderedAnswer: Boolean(input?.factorOrderedAnswer),
     factorSingleAttempt: Boolean(input?.factorSingleAttempt),
+    factorGoldenBellSingleAttempt: Boolean(input?.factorGoldenBellSingleAttempt),
     factorSuddenDeath: Boolean(input?.factorSuddenDeath)
   };
 }
 
+export function clampMatchSettings(input?: Partial<MatchSettings>): MatchSettings {
+  return {
+    maxPlayers: clampNumber(input?.maxPlayers ?? DEFAULT_MATCH_SETTINGS.maxPlayers, 2, MAX_PLAYERS_PER_ROOM),
+    allowMidMatchJoin: Boolean(input?.allowMidMatchJoin)
+  };
+}
+
 export function getModeLabel(mode: GameMode) {
-  return mode === "factor" ? "Prime Factor Sprint" : "Decimal / Binary Blitz";
+  return mode === "factor" ? "Prime Factor Sprint" : "Base Conversion Mode";
 }
 
 export function getModeDescription(mode: GameMode) {
   return mode === "factor"
     ? "Break the target into prime factors faster than everyone else."
-    : "Swap between decimal and binary before the room does.";
+    : "Convert between base 2, 10, and 16 faster than everyone else.";
 }
 
 export function createInvitePath(roomId: string) {
@@ -347,7 +393,7 @@ export function generateChallenge(input: GameMode | LobbySettings, randomValue =
     typeof input === "string" ? { ...DEFAULT_LOBBY_SETTINGS, mode: input } : clampSettings(input);
 
   if (settings.mode === "binary") {
-    return createBinaryChallenge(settings.binaryDecimalToBinaryChance, randomValue);
+    return createBinaryChallenge(settings.baseConversionPair, randomValue);
   }
 
   return createFactorChallenge(settings, randomValue);
@@ -356,8 +402,8 @@ export function generateChallenge(input: GameMode | LobbySettings, randomValue =
 export function evaluateSubmission(challenge: Challenge, answer: string): SubmissionEvaluation {
   // 모드별로 입력 포맷이 다르기 때문에 정규화 후 비교한다.
   if (challenge.mode === "binary") {
-    const expected = normalizeBinaryModeAnswer(challenge.meta as BinaryChallengeMeta, challenge.answer);
-    const submitted = normalizeBinaryModeAnswer(challenge.meta as BinaryChallengeMeta, answer);
+    const expected = normalizeBaseConversionAnswer(challenge.meta as BinaryChallengeMeta, challenge.answer);
+    const submitted = normalizeBaseConversionAnswer(challenge.meta as BinaryChallengeMeta, answer);
 
     return {
       normalizedAnswer: submitted,
@@ -404,21 +450,12 @@ export function calculatePoints(rank: number, endsAt: number, submittedAt: numbe
 }
 
 export function getBinaryPreviewValue(meta: BinaryChallengeMeta, value: string) {
-  if (meta.direction === "decimal-to-binary") {
-    const normalized = value.replace(/^0b/i, "").replace(/\s+/g, "");
-    if (!/^[01]+$/.test(normalized)) {
-      return "";
-    }
-
-    return String(parseInt(normalized, 2));
-  }
-
-  const parsed = Number(value.replace(/,/g, "").trim());
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseBaseValue(value, meta.targetBase);
+  if (parsed === null) {
     return "";
   }
 
-  return parsed.toString(2);
+  return formatBaseValue(parsed, meta.sourceBase);
 }
 
 export function sortPlayersByScore<T extends Pick<PlayerSummary, "score" | "correctAnswers" | "name">>(
@@ -541,42 +578,27 @@ function createFactorChallenge(settings: LobbySettings, randomValue: () => numbe
   };
 }
 
-function createBinaryChallenge(decimalToBinaryChance: number, randomValue: () => number): Challenge {
-  const direction: BinaryDirection =
-    randomValue() * 100 < decimalToBinaryChance ? "decimal-to-binary" : "binary-to-decimal";
-  const decimalValue = randomInt(9, 255, randomValue);
-
-  if (direction === "decimal-to-binary") {
-    const binaryValue = decimalValue.toString(2);
-
-    return {
-      id: createId("binary", randomValue),
-      mode: "binary",
-      prompt: `Convert ${decimalValue} to binary.`,
-      helperText: "Skip the 0b prefix. Example answer: 101011.",
-      answer: binaryValue,
-      prettyAnswer: binaryValue,
-      meta: {
-        direction,
-        sourceValue: String(decimalValue),
-        targetValue: binaryValue
-      }
-    };
-  }
-
-  const sourceValue = decimalValue.toString(2);
+function createBinaryChallenge(basePair: BaseConversionPair, randomValue: () => number): Challenge {
+  const [leftBase, rightBase] = parseBaseConversionPair(basePair);
+  const swapDirection = randomValue() < 0.5;
+  const sourceBase = swapDirection ? rightBase : leftBase;
+  const targetBase = swapDirection ? leftBase : rightBase;
+  const decimalValue = createBaseConversionValue(basePair, randomValue);
+  const sourceValue = formatBaseValue(decimalValue, sourceBase);
+  const targetValue = formatBaseValue(decimalValue, targetBase);
 
   return {
     id: createId("binary", randomValue),
     mode: "binary",
-    prompt: `Convert ${sourceValue} to decimal.`,
-    helperText: "Enter the base-10 number only.",
-    answer: String(decimalValue),
-    prettyAnswer: String(decimalValue),
+    prompt: `Convert ${sourceValue} from base ${sourceBase} to base ${targetBase}.`,
+    helperText: getBaseHelperText(targetBase),
+    answer: targetValue,
+    prettyAnswer: targetValue,
     meta: {
-      direction,
+      sourceBase,
+      targetBase,
       sourceValue,
-      targetValue: String(decimalValue)
+      targetValue
     }
   };
 }
@@ -620,6 +642,83 @@ function normalizeBinaryModeAnswer(meta: BinaryChallengeMeta, value: string) {
   // 10진수 답안은 숫자로 파싱 후 문자열로 다시 맞춰 비교한다.
   const parsed = Number(value.replace(/,/g, "").trim());
   return Number.isFinite(parsed) ? String(parsed) : "";
+}
+
+function normalizeBaseConversionAnswer(meta: BinaryChallengeMeta, value: string) {
+  const parsed = parseBaseValue(value, meta.targetBase);
+  return parsed === null ? "" : formatBaseValue(parsed, meta.targetBase);
+}
+
+function parseBaseConversionPair(pair: BaseConversionPair): [ConversionBase, ConversionBase] {
+  if (pair === "10-16") {
+    return [10, 16];
+  }
+
+  if (pair === "2-16") {
+    return [2, 16];
+  }
+
+  return [2, 10];
+}
+
+function createBaseConversionValue(basePair: BaseConversionPair, randomValue: () => number) {
+  if (basePair === "10-16") {
+    return randomInt(16, 4095, randomValue);
+  }
+
+  if (basePair === "2-16") {
+    return randomInt(16, 255, randomValue);
+  }
+
+  return randomInt(9, 255, randomValue);
+}
+
+function getBaseHelperText(base: ConversionBase) {
+  if (base === 2) {
+    return "Skip the 0b prefix. Example answer: 101011.";
+  }
+
+  if (base === 16) {
+    return "Use hexadecimal digits without 0x. Example answer: 2F.";
+  }
+
+  return "Enter the base-10 number only.";
+}
+
+function formatBaseValue(value: number, base: ConversionBase) {
+  if (base === 16) {
+    return value.toString(16).toUpperCase();
+  }
+
+  return value.toString(base);
+}
+
+function parseBaseValue(value: string, base: ConversionBase) {
+  const normalized = value.replace(/\s+/g, "").replace(/,/g, "").trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (base === 2) {
+    const binary = normalized.replace(/^0b/i, "");
+    if (!/^[01]+$/.test(binary)) {
+      return null;
+    }
+
+    return parseInt(binary, 2);
+  }
+
+  if (base === 16) {
+    const hexadecimal = normalized.replace(/^0x/i, "").toUpperCase();
+    if (!/^[0-9A-F]+$/.test(hexadecimal)) {
+      return null;
+    }
+
+    return parseInt(hexadecimal, 16);
+  }
+
+  const parsed = Number(normalized);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function clampNumber(value: number, min: number, max: number) {

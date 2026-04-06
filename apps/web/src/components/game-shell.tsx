@@ -18,6 +18,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type Dispatch,
   type FormEvent,
   type RefObject,
@@ -28,14 +29,19 @@ import { BlockMath } from "react-katex";
 import { io, type Socket } from "socket.io-client";
 import {
   DEFAULT_LOBBY_SETTINGS,
+  DEFAULT_MATCH_SETTINGS,
   GOLDEN_BELL_PENALTY_POINTS,
   MAX_PLAYERS_PER_ROOM,
+  PLAYER_NAME_MAX_LENGTH,
   SCORE_BASE_POINTS_BY_RANK,
   SCORE_FALLBACK_POINTS,
   SCORE_SPEED_BONUS_PER_SECOND,
+  clampMatchSettings,
   clampSettings,
   createInvitePath,
   getBinaryPreviewValue,
+  type MatchSettings,
+  sanitizePlayerName,
   sanitizeRoomId,
   sortPlayersByScore,
   type BinaryChallengeMeta,
@@ -66,6 +72,7 @@ import styles from "./game-shell.module.css";
 type BusyState =
   | "create"
   | "join"
+  | "leave"
   | "settings"
   | "start"
   | "claim"
@@ -81,6 +88,7 @@ const LOCALE_STORAGE_KEY = "factorrush:locale";
 const THEME_STORAGE_KEY = "factorrush:theme";
 let sharedSocket: Socket | null = null;
 let latestSharedRoomState: RoomSnapshot | null = null;
+const FLOATING_PRIME_DECORATIONS = createFloatingPrimeDecorations();
 
 interface GameShellProps {
   initialRoomId?: string;
@@ -95,6 +103,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const [roomCode, setRoomCode] = useState(initialRoomId ?? "");
   const [createMode, setCreateMode] = useState<GameMode>("factor");
   const [settingsDraft, setSettingsDraft] = useState<LobbySettings>(DEFAULT_LOBBY_SETTINGS);
+  const [matchSettingsDraft, setMatchSettingsDraft] = useState<MatchSettings>(DEFAULT_MATCH_SETTINGS);
   const [answerDraft, setAnswerDraft] = useState("");
   const [feedback, setFeedback] = useState("");
   const [busyState, setBusyState] = useState<BusyState>(null);
@@ -108,12 +117,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const lastInviteFallbackRef = useRef<string>("");
   const pendingSettingsRef = useRef<LobbySettings | null>(null);
   const settingsDraftRef = useRef<LobbySettings>(DEFAULT_LOBBY_SETTINGS);
+  const pendingMatchSettingsRef = useRef<MatchSettings | null>(null);
+  const matchSettingsDraftRef = useRef<MatchSettings>(DEFAULT_MATCH_SETTINGS);
   const lastRoomToastRef = useRef<string>("");
   const lastLobbyReadyCountRef = useRef<number | null>(null);
   const createNameInputRef = useRef<HTMLInputElement | null>(null);
   const joinNameInputRef = useRef<HTMLInputElement | null>(null);
   const joinRoomCodeInputRef = useRef<HTMLInputElement | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
+  const displayNameComposingRef = useRef(false);
 
   const activeRoomId = room?.roomId ?? initialRoomId ?? null;
   const copy = getCopy(locale);
@@ -193,6 +205,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   useEffect(() => {
     if (!room || room.phase !== "lobby") {
       pendingSettingsRef.current = null;
+      pendingMatchSettingsRef.current = null;
       return;
     }
 
@@ -214,6 +227,29 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   }, [settingsDraft]);
 
   useEffect(() => {
+    if (!room || room.phase !== "lobby") {
+      pendingMatchSettingsRef.current = null;
+      return;
+    }
+
+    if (pendingMatchSettingsRef.current) {
+      if (areMatchSettingsEqual(room.matchSettings, pendingMatchSettingsRef.current)) {
+        pendingMatchSettingsRef.current = null;
+        matchSettingsDraftRef.current = room.matchSettings;
+        setMatchSettingsDraft(room.matchSettings);
+      }
+      return;
+    }
+
+    matchSettingsDraftRef.current = room.matchSettings;
+    setMatchSettingsDraft(room.matchSettings);
+  }, [room]);
+
+  useEffect(() => {
+    matchSettingsDraftRef.current = matchSettingsDraft;
+  }, [matchSettingsDraft]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -224,7 +260,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     const nextTheme = savedTheme === "dark" ? "dark" : "light";
     const savedDisplayName = window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "";
 
-    setDisplayName(savedDisplayName);
+    setDisplayName(sanitizePlayerName(savedDisplayName));
     setLocale(nextLocale);
     setTheme(nextTheme);
     document.documentElement.dataset.theme = nextTheme;
@@ -389,7 +425,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
 
     attemptedReconnectRef.current = initialRoomId;
-    setDisplayName(savedSession.name);
+    setDisplayName(sanitizePlayerName(savedSession.name));
     setBusyState("join");
 
     void emitWithAck<JoinRoomResult>("room:join", {
@@ -425,8 +461,13 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     ? new URL(createInvitePath(activeRoomId), browserOrigin).toString()
     : "";
   const roundHasTimer = room?.round?.hasRoundTimer ?? false;
-  const roundDuration = room?.round && roundHasTimer ? room.round.endsAt - room.round.startedAt : 0;
-  const roundRemainingMs = room?.round && roundHasTimer ? Math.max(0, room.round.endsAt - now) : 0;
+  const roundDuration = room?.round && roundHasTimer ? room.settings.roundTimeSec * 1000 : 0;
+  const roundRemainingMs =
+    room?.round && roundHasTimer
+      ? room.round.isMainTimerPaused
+        ? room.round.mainTimerRemainingMs ?? 0
+        : Math.max(0, room.round.endsAt - now)
+      : 0;
   const roundRemainingSeconds = Math.ceil(roundRemainingMs / 1000);
   const progressRatio =
     room?.round && roundDuration > 0 ? Math.max(0, Math.min(1, roundRemainingMs / roundDuration)) : 0;
@@ -491,9 +532,34 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     router.push(createInvitePath(roomId));
   };
 
+  const commitDisplayName = (value: string) => {
+    setDisplayName(sanitizePlayerName(value));
+  };
+
+  const handleDisplayNameChange = (value: string) => {
+    if (displayNameComposingRef.current) {
+      setDisplayName(value);
+      return;
+    }
+
+    commitDisplayName(value);
+  };
+
+  const handleDisplayNameCompositionStart = () => {
+    displayNameComposingRef.current = true;
+  };
+
+  const handleDisplayNameCompositionEnd = (value: string) => {
+    displayNameComposingRef.current = false;
+    commitDisplayName(value);
+  };
+
   const handleCreateRoom = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const playerName = displayName.trim();
+    const playerName = sanitizePlayerName(displayName).trim();
+    if (playerName !== displayName) {
+      setDisplayName(playerName);
+    }
     if (!playerName) {
       setFeedback(copy.enterNicknameFirst);
       return;
@@ -521,7 +587,10 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   const handleJoinRoom = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const playerName = displayName.trim();
+    const playerName = sanitizePlayerName(displayName).trim();
+    if (playerName !== displayName) {
+      setDisplayName(playerName);
+    }
     const normalizedRoomId = sanitizeRoomId(roomCode);
 
     if (!playerName) {
@@ -583,6 +652,33 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
   };
 
+  const handleMatchSettingsDraftChange = (updater: SetStateAction<MatchSettings>) => {
+    const currentDraft = matchSettingsDraftRef.current;
+    const nextDraft = clampMatchSettings(
+      typeof updater === "function" ? updater(currentDraft) : updater
+    );
+    if (areMatchSettingsEqual(currentDraft, nextDraft)) {
+      return;
+    }
+
+    matchSettingsDraftRef.current = nextDraft;
+    setMatchSettingsDraft(nextDraft);
+    pendingMatchSettingsRef.current = nextDraft;
+
+    if (
+      room?.phase === "lobby" &&
+      room.players.some((candidate) => candidate.id === playerId && candidate.isHost)
+    ) {
+      void emitWithAck<null>("room:update-match-settings", {
+        roomId: room.roomId,
+        matchSettings: nextDraft
+      }).catch((error) => {
+        pendingMatchSettingsRef.current = null;
+        setFeedback(getErrorMessage(error, locale));
+      });
+    }
+  };
+
   const handleStartGame = async () => {
     if (!room) {
       return;
@@ -627,6 +723,30 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     try {
       await emitWithAck<null>("room:reset", { roomId: room.roomId });
       setFeedback(copy.resetToLobbyDone);
+    } catch (error) {
+      setFeedback(getErrorMessage(error, locale));
+    } finally {
+      setBusyState(null);
+    }
+  };
+
+  const handleLeaveRoom = async () => {
+    if (!room) {
+      return;
+    }
+
+    setBusyState("leave");
+
+    try {
+      await emitWithAck<null>("room:leave", { roomId: room.roomId });
+      clearRoomSession(room.roomId);
+      latestSharedRoomState = null;
+      setRoom(null);
+      setPlayerId(null);
+      setMemberRole(null);
+      setAnswerDraft("");
+      setRoomCode("");
+      router.push("/");
     } catch (error) {
       setFeedback(getErrorMessage(error, locale));
     } finally {
@@ -814,6 +934,25 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   return (
     <div className={styles.shell}>
       <div className={styles.noise} />
+      <div className={styles.primeFloatField} aria-hidden="true">
+        {FLOATING_PRIME_DECORATIONS.map((prime) => (
+          <span
+            key={`${prime.text}-${prime.top}-${prime.left}`}
+            className={styles.primeFloat}
+            style={
+              {
+                "--prime-top": prime.top,
+                "--prime-left": prime.left,
+                "--prime-duration": prime.duration,
+                "--prime-delay": prime.delay,
+                "--prime-size": prime.size
+              } as CSSProperties
+            }
+          >
+            {prime.text}
+          </span>
+        ))}
+      </div>
       <div className={styles.signalTop} />
       <div className={styles.signalBottom} />
 
@@ -899,6 +1038,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             inviteUrl={inviteUrl}
             sortedPlayers={sortedPlayers}
             settingsDraft={settingsDraft}
+            matchSettingsDraft={matchSettingsDraft}
             busyState={busyState}
             answerDraft={answerDraft}
             now={now}
@@ -908,6 +1048,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             answerInputRef={answerInputRef}
             onCopyInvite={handleCopyInvite}
             onSettingsDraftChange={handleSettingsDraftChange}
+            onMatchSettingsDraftChange={handleMatchSettingsDraftChange}
             onRenameRoom={handleRenameRoom}
             onRenamePlayer={handleRenamePlayer}
             onBecomePlayer={handleBecomePlayer}
@@ -916,6 +1057,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             onStartGame={handleStartGame}
             onAdvanceRound={handleAdvanceRound}
             onResetRoom={handleResetRoom}
+            onLeaveRoom={handleLeaveRoom}
             onClaimAnswerTurn={handleClaimAnswerTurn}
             onSendChat={handleSendChat}
             onAnswerDraftChange={setAnswerDraft}
@@ -927,13 +1069,17 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             roomCode={roomCode}
             setRoomCode={setRoomCode}
             displayName={displayName}
-            setDisplayName={setDisplayName}
+            onDisplayNameBlur={commitDisplayName}
+            onDisplayNameChange={handleDisplayNameChange}
+            onDisplayNameCompositionEnd={handleDisplayNameCompositionEnd}
+            onDisplayNameCompositionStart={handleDisplayNameCompositionStart}
             createNameInputRef={createNameInputRef}
             joinNameInputRef={joinNameInputRef}
             joinRoomCodeInputRef={joinRoomCodeInputRef}
             createMode={createMode}
             setCreateMode={setCreateMode}
             busyState={busyState}
+            onBackToHome={() => router.push("/")}
             onCreateRoom={handleCreateRoom}
             onJoinRoom={handleJoinRoom}
             hintedRoomId={initialRoomId}
@@ -951,13 +1097,17 @@ interface LandingExperienceProps {
   roomCode: string;
   setRoomCode: (value: string) => void;
   displayName: string;
-  setDisplayName: (value: string) => void;
+  onDisplayNameBlur: (value: string) => void;
+  onDisplayNameChange: (value: string) => void;
+  onDisplayNameCompositionEnd: (value: string) => void;
+  onDisplayNameCompositionStart: () => void;
   createNameInputRef: RefObject<HTMLInputElement | null>;
   joinNameInputRef: RefObject<HTMLInputElement | null>;
   joinRoomCodeInputRef: RefObject<HTMLInputElement | null>;
   createMode: GameMode;
   setCreateMode: (value: GameMode) => void;
   busyState: BusyState;
+  onBackToHome: () => void;
   onCreateRoom: (event: FormEvent<HTMLFormElement>) => void;
   onJoinRoom: (event: FormEvent<HTMLFormElement>) => void;
   hintedRoomId?: string | undefined;
@@ -968,18 +1118,54 @@ function LandingExperience({
   roomCode,
   setRoomCode,
   displayName,
-  setDisplayName,
+  onDisplayNameBlur,
+  onDisplayNameChange,
+  onDisplayNameCompositionEnd,
+  onDisplayNameCompositionStart,
   createNameInputRef,
   joinNameInputRef,
   joinRoomCodeInputRef,
   createMode,
   setCreateMode,
   busyState,
+  onBackToHome,
   onCreateRoom,
   onJoinRoom,
   hintedRoomId
 }: LandingExperienceProps) {
   const copy = getCopy(locale);
+  const landingText =
+    locale === "ko"
+      ? {
+          heroKicker: "링크를 공유하여 친구와 게임을 시작하세요.",
+          heroDescription: "방을 생성하고 초대 링크를 보내면 함께 플레이할 수 있습니다.",
+          hostSignal: "새로운 방",
+          createRoomTitle: "새로운 방 생성하기",
+          joinFeed: "기존 방",
+          joinRoomTitle: "기존 방 참가하기",
+          liveBoardLabel: "점수 현황",
+          liveBoardTitle: "리더 보드",
+          inviteTileBody: "링크를 공유하여 최대 12명의 친구와 플레이할 수 있습니다.",
+          liveBoardTileBody: "점수를 통해 친구와 암산 실력을 겨뤄보세요.",
+          storyOne: "socket 기반으로 멀리 있는 친구와도 게임이 가능합니다.",
+          storyTwo: "점수를 통해 친구와 암산 실력을 겨뤄보세요.",
+          storyThree: "추후 여러 게임들이 추가될 예정입니다!"
+        }
+      : {
+          heroKicker: "Share the link and start playing with friends.",
+          heroDescription: "Create a room and send the invite link to play together.",
+          hostSignal: "New room",
+          createRoomTitle: "Create a new room",
+          joinFeed: "Existing room",
+          joinRoomTitle: "Join an existing room",
+          liveBoardLabel: "Live standings",
+          liveBoardTitle: "Leaderboard",
+          inviteTileBody: "Share the link and play with up to 12 friends.",
+          liveBoardTileBody: "Compare your mental-math speed through the scores.",
+          storyOne: "Socket-based play makes it easy to game with friends from anywhere.",
+          storyTwo: "Compare your mental-math speed through the scores.",
+          storyThree: "More game types are planned for future updates!"
+        };
   const heroTiles = [
     {
       label: locale === "ko" ? "모드 A" : "mode a",
@@ -994,12 +1180,12 @@ function LandingExperience({
     {
       label: copy.inviteLineLabel,
       title: copy.shareUrlLabel,
-      body: copy.storyOne
+      body: landingText.inviteTileBody
     },
     {
-      label: copy.liveBoardLabel,
-      title: copy.liveBoardTitle,
-      body: copy.storyTwo
+      label: landingText.liveBoardLabel,
+      title: landingText.liveBoardTitle,
+      body: landingText.liveBoardTileBody
     }
   ];
 
@@ -1007,13 +1193,13 @@ function LandingExperience({
     <section className={styles.poster}>
       <div className={styles.heroField} data-testid="landing-hero">
         <div className={styles.heroCopy}>
-          <p className={styles.kicker}>{copy.heroKicker}</p>
+          <p className={styles.kicker}>{landingText.heroKicker}</p>
           <h2 className={styles.heroTitle}>
             {copy.heroTitleTop}
             <br />
             {copy.heroTitleBottom}
           </h2>
-          <p className={styles.heroDescription}>{copy.heroDescription}</p>
+          <p className={styles.heroDescription}>{landingText.heroDescription}</p>
         </div>
 
         <div className={styles.heroModuleGrid}>
@@ -1028,8 +1214,20 @@ function LandingExperience({
 
         <div className={styles.numberWall} aria-hidden="true">
           <span>924 = 2² × 3 × 7 × 11</span>
-          <span>111001 = 57</span>
-          <span>101101 = 45</span>
+          <span className={styles.numberEquation}>
+            <span className={styles.numberEquationMain}>111001</span>
+            <span className={styles.numberEquationBase}>(2)</span>
+            {" = "}
+            <span className={styles.numberEquationMain}>57</span>
+            <span className={styles.numberEquationBase}>(10)</span>
+          </span>
+          <span className={styles.numberEquation}>
+            <span className={styles.numberEquationMain}>101101</span>
+            <span className={styles.numberEquationBase}>(2)</span>
+            {" = "}
+            <span className={styles.numberEquationMain}>45</span>
+            <span className={styles.numberEquationBase}>(10)</span>
+          </span>
           <span>1452 = 2² × 3 × 11²</span>
         </div>
       </div>
@@ -1037,8 +1235,8 @@ function LandingExperience({
       <div className={styles.controlBand}>
         <form className={styles.signalForm} onSubmit={onCreateRoom}>
           <div className={styles.formHeading}>
-            <span>{copy.hostSignal}</span>
-            <strong>{copy.createRoomTitle}</strong>
+            <span>{landingText.hostSignal}</span>
+            <strong>{landingText.createRoomTitle}</strong>
           </div>
 
           <label className={styles.field}>
@@ -1046,9 +1244,13 @@ function LandingExperience({
             <input
               ref={createNameInputRef}
               data-testid="create-name-input"
+              maxLength={PLAYER_NAME_MAX_LENGTH * 2}
               type="text"
               value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
+              onBlur={(event) => onDisplayNameBlur(event.target.value)}
+              onChange={(event) => onDisplayNameChange(event.target.value)}
+              onCompositionEnd={(event) => onDisplayNameCompositionEnd(event.currentTarget.value)}
+              onCompositionStart={onDisplayNameCompositionStart}
               placeholder="PrimePilot"
             />
           </label>
@@ -1087,8 +1289,8 @@ function LandingExperience({
         {!hintedRoomId ? (
           <form className={styles.signalForm} onSubmit={onJoinRoom}>
             <div className={styles.formHeading}>
-              <span>{copy.joinFeed}</span>
-              <strong>{copy.joinRoomTitle}</strong>
+              <span>{landingText.joinFeed}</span>
+              <strong>{landingText.joinRoomTitle}</strong>
             </div>
 
             <label className={styles.field}>
@@ -1096,9 +1298,13 @@ function LandingExperience({
               <input
                 ref={joinNameInputRef}
                 data-testid="join-name-input"
+                maxLength={PLAYER_NAME_MAX_LENGTH * 2}
                 type="text"
                 value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
+                onBlur={(event) => onDisplayNameBlur(event.target.value)}
+                onChange={(event) => onDisplayNameChange(event.target.value)}
+                onCompositionEnd={(event) => onDisplayNameCompositionEnd(event.currentTarget.value)}
+                onCompositionStart={onDisplayNameCompositionStart}
                 placeholder="BinaryRacer"
               />
             </label>
@@ -1130,15 +1336,15 @@ function LandingExperience({
       <div className={styles.storyStrip}>
         <article>
           <span>01</span>
-          <p>{copy.storyOne}</p>
+          <p>{landingText.storyOne}</p>
         </article>
         <article>
           <span>02</span>
-          <p>{copy.storyTwo}</p>
+          <p>{landingText.storyTwo}</p>
         </article>
         <article>
           <span>03</span>
-          <p>{copy.storyThree}</p>
+          <p>{landingText.storyThree}</p>
         </article>
       </div>
 
@@ -1161,21 +1367,35 @@ function LandingExperience({
               <input
                 ref={joinNameInputRef}
                 data-testid="invite-name-input"
+                maxLength={PLAYER_NAME_MAX_LENGTH * 2}
                 type="text"
                 value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
+                onBlur={(event) => onDisplayNameBlur(event.target.value)}
+                onChange={(event) => onDisplayNameChange(event.target.value)}
+                onCompositionEnd={(event) => onDisplayNameCompositionEnd(event.currentTarget.value)}
+                onCompositionStart={onDisplayNameCompositionStart}
                 placeholder="PrimePilot"
               />
             </label>
 
-            <button
-              className={styles.primaryAction}
-              data-testid="invite-join-button"
-              disabled={busyState === "join"}
-              type="submit"
-            >
-              {busyState === "join" ? copy.joiningRoomButton : copy.joinViaLinkButton}
-            </button>
+            <div className={styles.joinOverlayActions}>
+              <button
+                className={styles.primaryAction}
+                data-testid="invite-join-button"
+                disabled={busyState === "join"}
+                type="submit"
+              >
+                {busyState === "join" ? copy.joiningRoomButton : copy.joinViaLinkButton}
+              </button>
+              <button
+                className={styles.secondaryAction}
+                data-testid="invite-back-home-button"
+                onClick={onBackToHome}
+                type="button"
+              >
+                {locale === "ko" ? "메인으로 돌아가기" : "Back to Home"}
+              </button>
+            </div>
           </form>
         </div>
       ) : null}
@@ -1193,6 +1413,7 @@ interface RoomExperienceProps {
   inviteUrl: string;
   sortedPlayers: RoomSnapshot["players"];
   settingsDraft: LobbySettings;
+  matchSettingsDraft: MatchSettings;
   busyState: BusyState;
   answerDraft: string;
   now: number;
@@ -1202,6 +1423,7 @@ interface RoomExperienceProps {
   answerInputRef: RefObject<HTMLInputElement | null>;
   onCopyInvite: () => void;
   onSettingsDraftChange: Dispatch<SetStateAction<LobbySettings>>;
+  onMatchSettingsDraftChange: Dispatch<SetStateAction<MatchSettings>>;
   onRenameRoom: (roomName: string) => void;
   onRenamePlayer: (playerName: string) => void;
   onBecomePlayer: () => void;
@@ -1210,6 +1432,7 @@ interface RoomExperienceProps {
   onStartGame: () => void;
   onAdvanceRound: () => void;
   onResetRoom: () => void;
+  onLeaveRoom: () => void;
   onClaimAnswerTurn: () => void;
   onSendChat: (text: string) => Promise<boolean>;
   onAnswerDraftChange: (value: string) => void;
@@ -1226,6 +1449,7 @@ function RoomExperience({
   inviteUrl,
   sortedPlayers,
   settingsDraft,
+  matchSettingsDraft,
   busyState,
   answerDraft,
   now,
@@ -1235,6 +1459,7 @@ function RoomExperience({
   answerInputRef,
   onCopyInvite,
   onSettingsDraftChange,
+  onMatchSettingsDraftChange,
   onRenameRoom,
   onRenamePlayer,
   onBecomePlayer,
@@ -1243,6 +1468,7 @@ function RoomExperience({
   onStartGame,
   onAdvanceRound,
   onResetRoom,
+  onLeaveRoom,
   onClaimAnswerTurn,
   onSendChat,
   onAnswerDraftChange,
@@ -1250,6 +1476,7 @@ function RoomExperience({
 }: RoomExperienceProps) {
   const copy = getCopy(locale);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMatchSettingsOpen, setIsMatchSettingsOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [isScoreGuideOpen, setIsScoreGuideOpen] = useState(false);
   const [scoreGuidePage, setScoreGuidePage] = useState<0 | 1>(0);
@@ -1257,6 +1484,7 @@ function RoomExperience({
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isRenamingRoom, setIsRenamingRoom] = useState(false);
   const [isRenamingPlayer, setIsRenamingPlayer] = useState(false);
+  const [isCompactLiveRail, setIsCompactLiveRail] = useState(false);
   const [roomNameDraft, setRoomNameDraft] = useState(room.roomName);
   const [playerNameDraft, setPlayerNameDraft] = useState(
     room.players.find((candidate) => candidate.id === playerId)?.name ??
@@ -1269,6 +1497,26 @@ function RoomExperience({
   const chatListRef = useRef<HTMLDivElement | null>(null);
   const lobbyChatListRef = useRef<HTMLDivElement | null>(null);
   const playerNameInputRef = useRef<HTMLInputElement | null>(null);
+  const playerNameComposingRef = useRef(false);
+  const commitPlayerNameDraft = (value: string) => {
+    setPlayerNameDraft(sanitizePlayerName(value));
+  };
+
+  const handlePlayerNameDraftChange = (value: string) => {
+    if (playerNameComposingRef.current) {
+      setPlayerNameDraft(value);
+      return;
+    }
+
+    commitPlayerNameDraft(value);
+  };
+  const handlePlayerNameCompositionStart = () => {
+    playerNameComposingRef.current = true;
+  };
+  const handlePlayerNameCompositionEnd = (value: string) => {
+    playerNameComposingRef.current = false;
+    commitPlayerNameDraft(value);
+  };
   const roundCopy = room.round ? getChallengeCopy(locale, room.round) : null;
   const statusMessage = getRoomMessageByLocale(locale, room.messageKey, room.messagePlayerName);
   const currentPlayer = room.players.find((candidate) => candidate.id === playerId) ?? null;
@@ -1284,11 +1532,21 @@ function RoomExperience({
   const podiumPlayers = sortedPlayers.slice(0, 3);
   const binaryRatioSummary =
     room.settings.mode === "binary"
-      ? getBinaryRatioSummary(locale, room.settings.binaryDecimalToBinaryChance)
+      ? getBinaryRatioSummary(locale, room.settings.baseConversionPair)
       : null;
   const connectedPlayers = room.players.filter((candidate) => candidate.connected);
   const connectedGuests = connectedPlayers.filter((candidate) => !candidate.isHost);
   const connectedSpectators = room.spectators.filter((candidate) => candidate.connected);
+  const spectatorCount = room.spectators.length;
+  const canSeatMorePlayers = room.players.length < room.matchSettings.maxPlayers;
+  const liveBoardLabel = locale === "ko" ? "점수 현황" : "Live standings";
+  const liveBoardTitle = locale === "ko" ? "리더 보드" : "Leaderboard";
+  const lobbyRosterLabel = locale === "ko" ? "로비 공간" : "Lobby space";
+  const lobbyRosterTitle = locale === "ko" ? "메인 로비 공간" : "Main Lobby Space";
+  const rosterSlots = Array.from(
+    { length: room.matchSettings.maxPlayers },
+    (_, index) => room.players[index] ?? null
+  );
   const readyCount = connectedGuests.filter((candidate) => candidate.isReady).length;
   const allReady = connectedGuests.length === 0 || readyCount === connectedGuests.length;
   const roundTransitionSeconds =
@@ -1326,6 +1584,10 @@ function RoomExperience({
   const settingsTimeSummary = getRoundTimeSummary(locale, settingsDraft);
   const isGoldenBellSettings =
     settingsDraft.mode === "factor" && settingsDraft.factorResolutionMode === "golden-bell";
+  const isGoldenBellSingleAttempt =
+    room.settings.mode === "factor" &&
+    room.settings.factorResolutionMode === "golden-bell" &&
+    room.settings.factorGoldenBellSingleAttempt;
   const visibleChatFeed = room.chatFeed;
   const recentChatByPlayer = getRecentChatByPlayer(room.chatFeed, now);
   const isGoldenBellRound =
@@ -1342,10 +1604,21 @@ function RoomExperience({
       ? room.players.find((candidate) => candidate.id === room.round?.answeringPlayerId) ?? null
       : null;
   const isMyAnswerTurn = answeringPlayer?.id === playerId;
+  const isGoldenBellReclaimBlocked =
+    isGoldenBellRound &&
+    connectedPlayers.length > 1 &&
+    room.round?.lastAnsweringPlayerId === playerId &&
+    !isMyAnswerTurn;
   const goldenBellCountdownSeconds =
     room.round?.answerWindowEndsAt != null
       ? Math.max(0, Math.ceil((room.round.answerWindowEndsAt - now) / 1000))
       : 0;
+  const canClaimGoldenBell =
+    isGoldenBellRound &&
+    !myRoundStatus?.hasSubmitted &&
+    !myRoundStatus?.isLockedOut &&
+    !answeringPlayer &&
+    !isGoldenBellReclaimBlocked;
   const roundDeltaRows =
     room.phase === "round-ended" && room.round
       ? room.round.playerStatuses
@@ -1384,6 +1657,7 @@ function RoomExperience({
   useEffect(() => {
     if (room.phase !== "lobby") {
       setIsSettingsOpen(false);
+      setIsMatchSettingsOpen(false);
       setIsScoreGuideOpen(false);
       setIsRenamingRoom(false);
       setIsRenamingPlayer(false);
@@ -1413,6 +1687,33 @@ function RoomExperience({
   useEffect(() => {
     setPlayerNameDraft(currentMember?.name ?? "");
   }, [currentMember?.name]);
+
+  useEffect(() => {
+    const syncCompactRail = () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const viewportScale = window.visualViewport?.scale ?? 1;
+      const shouldCompact =
+        room.phase === "round-active" &&
+        sortedPlayers.length >= 6 &&
+        (viewportWidth < 1360 || viewportHeight < 860 || viewportScale > 1.05);
+
+      setIsCompactLiveRail(shouldCompact);
+    };
+
+    syncCompactRail();
+    window.addEventListener("resize", syncCompactRail);
+    window.visualViewport?.addEventListener("resize", syncCompactRail);
+
+    return () => {
+      window.removeEventListener("resize", syncCompactRail);
+      window.visualViewport?.removeEventListener("resize", syncCompactRail);
+    };
+  }, [room.phase, sortedPlayers.length]);
 
   useEffect(() => {
     if (!isRenamingRoom) {
@@ -1528,13 +1829,18 @@ function RoomExperience({
 
   const handlePlayerNameCommit = () => {
     setIsRenamingPlayer(false);
-    if (!playerNameDraft.trim()) {
+    const nextPlayerName = sanitizePlayerName(playerNameDraft).trim();
+    if (nextPlayerName !== playerNameDraft) {
+      setPlayerNameDraft(nextPlayerName);
+    }
+
+    if (!nextPlayerName) {
       setPlayerNameDraft(currentMember?.name ?? "");
       return;
     }
 
-    if (playerNameDraft.trim() !== (currentMember?.name ?? "")) {
-      onRenamePlayer(playerNameDraft);
+    if (nextPlayerName !== (currentMember?.name ?? "")) {
+      onRenamePlayer(nextPlayerName);
     }
   };
 
@@ -1609,8 +1915,8 @@ function RoomExperience({
               <div className={styles.lobbyLead}>
                 <div className={styles.lobbyLeadRow}>
                   <div>
-                    <span className={styles.challengeLabel}>{copy.lobbyRosterLabel}</span>
-                    <h4>{copy.lobbyRosterTitle}</h4>
+                    <span className={styles.challengeLabel}>{lobbyRosterLabel}</span>
+                    <h4>{lobbyRosterTitle}</h4>
                   </div>
 
                   <div className={styles.actionRow}>
@@ -1632,7 +1938,15 @@ function RoomExperience({
                           onClick={() => setIsSettingsOpen(true)}
                           type="button"
                         >
-                          {copy.openSettings}
+                          {copy.openGameSettings}
+                        </button>
+                        <button
+                          className={styles.secondaryAction}
+                          data-testid="match-settings-button"
+                          onClick={() => setIsMatchSettingsOpen(true)}
+                          type="button"
+                        >
+                          {copy.openMatchSettings}
                         </button>
                         <button
                           className={styles.primaryAction}
@@ -1649,15 +1963,24 @@ function RoomExperience({
                       <button
                         className={styles.secondaryAction}
                         data-testid="become-player-button"
-                        disabled={room.players.length >= MAX_PLAYERS_PER_ROOM}
+                        disabled={!canSeatMorePlayers}
                         onClick={onBecomePlayer}
                         type="button"
                       >
-                        {room.players.length >= MAX_PLAYERS_PER_ROOM
+                        {!canSeatMorePlayers
                           ? copy.spectatorSeatFull
                           : copy.spectatorSeatJoin}
                       </button>
                     ) : null}
+                    <button
+                      className={styles.secondaryAction}
+                      data-testid="leave-room-button"
+                      disabled={busyState === "leave"}
+                      onClick={onLeaveRoom}
+                      type="button"
+                    >
+                      {busyState === "leave" ? copy.leavingRoom : copy.leaveRoom}
+                    </button>
                   </div>
                 </div>
 
@@ -1669,6 +1992,7 @@ function RoomExperience({
                   </span>
                   <span>
                     {room.players.length}
+                    /{room.matchSettings.maxPlayers}
                     {locale === "ko" ? copy.playersUnit : ` ${copy.playersUnit}`}
                   </span>
                   {connectedSpectators.length > 0 ? (
@@ -1715,78 +2039,19 @@ function RoomExperience({
               </div>
 
               <div className={styles.rosterArena}>
-                {room.players.map((candidate, index) => (
-                  <article
-                    className={styles.playerPod}
-                    data-host={candidate.isHost}
-                    data-me={candidate.id === playerId}
-                    data-offline={!candidate.connected}
-                    key={candidate.id}
-                  >
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    {candidate.id === playerId && isRenamingPlayer ? (
-                      <form
-                        className={styles.playerNameForm}
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          handlePlayerNameCommit();
-                        }}
-                      >
-                        <input
-                          ref={playerNameInputRef}
-                          className={styles.playerNameInput}
-                          data-testid="player-name-input"
-                          onBlur={handlePlayerNameCommit}
-                          onChange={(event) => setPlayerNameDraft(event.target.value)}
-                          value={playerNameDraft}
-                        />
-                      </form>
-                    ) : candidate.id === playerId ? (
-                      <button
-                        className={styles.playerNameButton}
-                        data-testid="player-name-button"
-                        onClick={() => setIsRenamingPlayer(true)}
-                        type="button"
-                      >
-                        {candidate.name}
-                      </button>
-                    ) : (
-                      <strong>{candidate.name}</strong>
-                    )}
-                    <p>{getLobbyPlayerNote(locale, candidate.isHost, candidate.connected, candidate.isReady)}</p>
-                    <div className={styles.podScore}>
-                      {candidate.isHost ? (
-                        <small className={styles.hostBadge}>{copy.hostSuffix}</small>
-                      ) : (
-                        <small>{candidate.isReady ? getReadyBadge(locale) : getNotReadyBadge(locale)}</small>
-                      )}
-                      {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
-                    </div>
-                    {isHost && candidate.id !== playerId && candidate.connected ? (
-                      <button
-                        className={styles.miniAction}
-                        onClick={() => onTransferHost(candidate.id)}
-                        type="button"
-                      >
-                        {copy.transferHost}
-                      </button>
-                    ) : null}
-                  </article>
-                ))}
-              </div>
-
-              {room.spectators.length > 0 ? (
-                <div className={styles.spectatorStrip}>
-                  <div className={styles.railHeading}>
-                    <span>{copy.spectatorLabel}</span>
-                    <strong>{copy.spectatorTitle}</strong>
-                  </div>
-                  <div className={styles.spectatorList}>
-                    {room.spectators.map((candidate) => (
-                      candidate.id === playerId && isRenamingPlayer ? (
+                {rosterSlots.map((candidate, index) =>
+                  candidate ? (
+                    <article
+                      className={styles.playerPod}
+                      data-host={candidate.isHost}
+                      data-me={candidate.id === playerId}
+                      data-offline={!candidate.connected}
+                      key={candidate.id}
+                    >
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      {candidate.id === playerId && isRenamingPlayer ? (
                         <form
                           className={styles.playerNameForm}
-                          key={candidate.id}
                           onSubmit={(event) => {
                             event.preventDefault();
                             handlePlayerNameCommit();
@@ -1796,32 +2061,73 @@ function RoomExperience({
                             ref={playerNameInputRef}
                             className={styles.playerNameInput}
                             data-testid="player-name-input"
+                            maxLength={PLAYER_NAME_MAX_LENGTH * 2}
                             onBlur={handlePlayerNameCommit}
-                            onChange={(event) => setPlayerNameDraft(event.target.value)}
+                            onChange={(event) => handlePlayerNameDraftChange(event.target.value)}
+                            onCompositionEnd={(event) => handlePlayerNameCompositionEnd(event.currentTarget.value)}
+                            onCompositionStart={handlePlayerNameCompositionStart}
                             value={playerNameDraft}
                           />
                         </form>
                       ) : candidate.id === playerId ? (
                         <button
-                          className={styles.spectatorChipButton}
+                          className={styles.playerNameButton}
                           data-testid="player-name-button"
-                          key={candidate.id}
                           onClick={() => setIsRenamingPlayer(true)}
                           type="button"
                         >
                           {candidate.name}
                         </button>
                       ) : (
-                        <span
-                          className={styles.spectatorChip}
-                          data-me={candidate.id === playerId}
-                          data-offline={!candidate.connected}
-                          key={candidate.id}
+                        <strong>{candidate.name}</strong>
+                      )}
+                      <div className={styles.playerPodMetaSpacer} aria-hidden="true" />
+                      <div className={styles.podScore}>
+                        {candidate.isHost ? (
+                          <small className={styles.hostBadge}>{copy.hostSuffix}</small>
+                        ) : (
+                          <small>{candidate.isReady ? getReadyBadge(locale) : getNotReadyBadge(locale)}</small>
+                        )}
+                        {!candidate.connected ? <small>{copy.offlineSuffix}</small> : null}
+                      </div>
+                      {isHost && candidate.id !== playerId && candidate.connected ? (
+                        <button
+                          className={styles.miniAction}
+                          onClick={() => onTransferHost(candidate.id)}
+                          type="button"
                         >
-                          {candidate.name}
-                        </span>
-                      )
-                    ))}
+                          {copy.transferHost}
+                        </button>
+                      ) : null}
+                    </article>
+                  ) : (
+                    <article className={`${styles.playerPod} ${styles.playerPodGhost}`} key={`ghost-${index}`}>
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <div className={styles.playerPodGhostBody} aria-hidden="true" />
+                    </article>
+                  )
+                )}
+              </div>
+
+              {spectatorCount > 0 ? (
+                <div className={styles.spectatorStrip}>
+                  <div className={styles.railHeading}>
+                    <span>{copy.spectatorLabel}</span>
+                    <strong>{copy.spectatorTitle}</strong>
+                  </div>
+                  <div className={styles.spectatorSummary} data-testid="spectator-count-card">
+                    <strong>
+                      {locale === "ko"
+                        ? `현재 관전자 ${spectatorCount}명`
+                        : `${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"}`}
+                    </strong>
+                    <p>
+                      {isSpectator
+                        ? copy.spectatorLiveBody
+                        : locale === "ko"
+                          ? "관전자는 라운드 종료 후 로비로 함께 돌아옵니다."
+                          : "Spectators return to the lobby together after the round ends."}
+                    </p>
                   </div>
                 </div>
               ) : null}
@@ -1920,8 +2226,12 @@ function RoomExperience({
                     <strong>
                       {room.settings.factorResolutionMode === "golden-bell"
                         ? locale === "ko"
-                          ? "골든벨 기회를 사용해 더 이상 답변할 수 없습니다."
-                          : "You already spent your golden bell chance."
+                          ? isGoldenBellSingleAttempt
+                            ? "골든벨 기회를 사용해 더 이상 답변할 수 없습니다."
+                            : "현재 답변권은 비어 있지만 잠시 뒤 다시 외칠 수 있습니다."
+                          : isGoldenBellSingleAttempt
+                            ? "You already spent your golden bell chance."
+                            : "Your answer turn ended. You can buzz again."
                         : locale === "ko"
                           ? "이번 라운드의 기회를 모두 사용했습니다."
                           : "You are out of attempts for this round."}
@@ -1929,65 +2239,23 @@ function RoomExperience({
                     <p>
                       {room.settings.factorResolutionMode === "golden-bell"
                         ? locale === "ko"
-                          ? "다른 플레이어의 결과를 기다려 주세요."
-                          : "Wait for the rest of the room to finish."
+                          ? isGoldenBellSingleAttempt
+                            ? "다른 플레이어의 결과를 기다려 주세요."
+                            : "다음 기회를 위해 입력을 다시 준비할 수 있습니다."
+                          : isGoldenBellSingleAttempt
+                            ? "Wait for the rest of the room to finish."
+                            : "Prepare the next input while waiting for the turn to reopen."
                         : locale === "ko"
                           ? "정답 공개까지 잠시 기다려 주세요."
                           : "Wait for the answer reveal."}
                     </p>
                   </div>
-                ) : isGoldenBellRound && answeringPlayer && !isMyAnswerTurn ? (
-                  <div className={styles.waitingPanel} data-testid="golden-bell-waiting-panel">
-                    <span className={styles.challengeLabel}>{copy.goldenBellWindowLabel}</span>
-                    <strong>
-                      {locale === "ko"
-                        ? `${answeringPlayer.name}님이 답변 중입니다.`
-                        : `${answeringPlayer.name} is answering now.`}
-                    </strong>
-                    <p>
-                      {copy.goldenBellWaiting}{" "}
-                      {goldenBellCountdownSeconds > 0
-                        ? locale === "ko"
-                          ? `${goldenBellCountdownSeconds}${copy.secondsUnit} 남음`
-                          : `${goldenBellCountdownSeconds}s left`
-                        : null}
-                    </p>
-                  </div>
-                ) : isGoldenBellRound && !answeringPlayer ? (
-                  <div className={styles.answerPanel} data-testid="golden-bell-claim-panel">
-                    <span className={styles.challengeLabel}>{copy.goldenBellWindowLabel}</span>
-                    <strong>
-                      {locale === "ko"
-                        ? "먼저 정답 외치기 버튼을 눌러 답변권을 가져가세요."
-                        : "Buzz first to claim the answer turn."}
-                    </strong>
-                    <p>
-                      {locale === "ko"
-                        ? "답변권을 얻은 플레이어만 잠시 동안 정답을 입력할 수 있습니다."
-                        : "Only the player who buzzes first gets a short answer window."}
-                    </p>
-                    <div className={styles.actionRow}>
-                      <button
-                        className={styles.secondaryAction}
-                        data-testid="answer-rules-button"
-                        onClick={() => setIsRulesOpen(true)}
-                        type="button"
-                      >
-                        {locale === "ko" ? "룰" : "Rules"}
-                      </button>
-                      <button
-                        className={styles.primaryAction}
-                        data-testid="claim-answer-button"
-                        disabled={busyState === "claim"}
-                        onClick={onClaimAnswerTurn}
-                        type="button"
-                      >
-                        {busyState === "claim" ? copy.claimingAnswerTurn : copy.claimAnswerTurn}
-                      </button>
-                    </div>
-                  </div>
                 ) : (
-                  <form className={styles.answerPanel} onSubmit={onSubmitAnswer}>
+                  <form
+                    className={styles.answerPanel}
+                    data-testid={isGoldenBellRound ? "golden-bell-answer-panel" : undefined}
+                    onSubmit={onSubmitAnswer}
+                  >
                     <label className={styles.field}>
                       <span className={styles.fieldLabelLine}>
                         {copy.answerInputLabel}
@@ -2003,7 +2271,7 @@ function RoomExperience({
                         placeholder={
                           room.settings.mode === "factor"
                             ? copy.answerPlaceholderFactor
-                            : copy.answerPlaceholderBinary
+                            : getBaseConversionPlaceholder(room.round?.challengeMeta as BinaryChallengeMeta | undefined)
                         }
                         type="text"
                         value={answerDraft}
@@ -2014,14 +2282,25 @@ function RoomExperience({
                         {copy.binaryPreviewLabel}: {binaryPreviewText}
                       </small>
                     ) : null}
-                    {isGoldenBellRound && isMyAnswerTurn ? (
+                    {isGoldenBellRound ? (
                       <small>
-                        {copy.goldenBellAnswering}{" "}
-                        {goldenBellCountdownSeconds > 0
-                          ? locale === "ko"
-                            ? `${goldenBellCountdownSeconds}${copy.secondsUnit} 안에 답하세요.`
-                            : `Answer within ${goldenBellCountdownSeconds}s.`
-                          : null}
+                        {isMyAnswerTurn
+                          ? `${copy.goldenBellAnswering} ${
+                              goldenBellCountdownSeconds > 0
+                                ? locale === "ko"
+                                  ? `${goldenBellCountdownSeconds}${copy.secondsUnit} 안에 답하세요.`
+                                  : `Answer within ${goldenBellCountdownSeconds}s.`
+                                : ""
+                            }`
+                          : answeringPlayer
+                            ? locale === "ko"
+                              ? `${answeringPlayer.name}님이 답변 중입니다. ${goldenBellCountdownSeconds > 0 ? `${goldenBellCountdownSeconds}${copy.secondsUnit} 남음` : ""}`
+                              : `${answeringPlayer.name} is answering now. ${goldenBellCountdownSeconds > 0 ? `${goldenBellCountdownSeconds}s left` : ""}`
+                            : isGoldenBellReclaimBlocked
+                              ? locale === "ko"
+                                ? "방금 외친 플레이어는 다른 플레이어 1명이 먼저 외친 뒤에 다시 외칠 수 있습니다."
+                                : "The last caller must wait until another player claims first."
+                              : copy.enterFocusHint}
                       </small>
                     ) : (
                       <small>{copy.enterFocusHint}</small>
@@ -2035,10 +2314,25 @@ function RoomExperience({
                       >
                         {locale === "ko" ? "룰" : "Rules"}
                       </button>
+                      {isGoldenBellRound ? (
+                        <button
+                          className={styles.secondaryAction}
+                          data-testid="claim-answer-button"
+                          disabled={busyState === "claim" || !canClaimGoldenBell}
+                          onClick={onClaimAnswerTurn}
+                          type="button"
+                        >
+                          {busyState === "claim" ? copy.claimingAnswerTurn : copy.claimAnswerTurn}
+                        </button>
+                      ) : null}
                       <button
                         className={styles.primaryAction}
                         data-testid="submit-answer-button"
-                        disabled={!answerDraft.trim() || busyState === "submit"}
+                        disabled={
+                          !answerDraft.trim() ||
+                          busyState === "submit" ||
+                          (isGoldenBellRound && !isMyAnswerTurn)
+                        }
                         type="submit"
                       >
                         {busyState === "submit" ? copy.checkingAnswer : copy.submitAnswer}
@@ -2064,7 +2358,7 @@ function RoomExperience({
             : room.phase === "finished"
               ? styles.sideRailResults
               : styles.sideRailLive
-        }`}
+        } ${isCompactLiveRail ? styles.sideRailLiveCompact : ""}`}
       >
         {room.phase === "lobby" ? (
           <>
@@ -2195,10 +2489,9 @@ function RoomExperience({
           <>
             <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
             <div className={styles.railHeading}>
-              <span>{copy.liveBoardLabel}</span>
-              <strong>{copy.liveBoardTitle}</strong>
+              <span>{liveBoardLabel}</span>
+              <strong>{liveBoardTitle}</strong>
             </div>
-            <p className={styles.railBody}>{copy.liveBoardBody}</p>
 
             <div className={styles.liveRailContent}>
               <div className={styles.leaderboardSection}>
@@ -2247,23 +2540,23 @@ function RoomExperience({
                   })}
                 </div>
 
-                {room.spectators.length > 0 ? (
+                {spectatorCount > 0 ? (
                   <div className={styles.liveSpectatorPanel}>
                     <div className={styles.railHeading}>
                       <span>{copy.spectatorLabel}</span>
                       <strong>{copy.spectatorTitle}</strong>
                     </div>
-                    <div className={styles.spectatorList}>
-                      {room.spectators.map((candidate) => (
-                        <span
-                          className={styles.spectatorChip}
-                          data-me={candidate.id === playerId}
-                          data-offline={!candidate.connected}
-                          key={candidate.id}
-                        >
-                          {candidate.name}
-                        </span>
-                      ))}
+                    <div className={styles.spectatorSummary} data-testid="live-spectator-count-card">
+                      <strong>
+                        {locale === "ko"
+                          ? `현재 관전자 ${spectatorCount}명`
+                          : `${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"}`}
+                      </strong>
+                      <p>
+                        {locale === "ko"
+                          ? "관전자는 점수판과 정답 공개만 보고, 라운드가 끝나면 로비로 함께 돌아갑니다."
+                          : "Spectators follow the board and return to the lobby when the round ends."}
+                      </p>
                     </div>
                   </div>
                 ) : null}
@@ -2581,7 +2874,6 @@ function RoomExperience({
                   <input
                     className={styles.rangeInput}
                     data-testid="time-limit-range"
-                    disabled={isGoldenBellSettings}
                     type="range"
                     min="15"
                     max="90"
@@ -2602,28 +2894,32 @@ function RoomExperience({
 
               {settingsDraft.mode === "binary" ? (
                 <div className={styles.settingsStack}>
-                  <div className={`${styles.field} ${styles.rangeField}`}>
+                  <div className={styles.field}>
                     <div className={styles.fieldHead}>
                       <span>{copy.binaryRatioField}</span>
                       <strong className={styles.rangeValue}>
-                        {getBinaryRatioSummary(locale, settingsDraft.binaryDecimalToBinaryChance)}
+                        {getBinaryRatioSummary(locale, settingsDraft.baseConversionPair)}
                       </strong>
                     </div>
-                    <input
-                      className={styles.rangeInput}
-                      data-testid="binary-ratio-range"
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="10"
-                      value={settingsDraft.binaryDecimalToBinaryChance}
-                      onChange={(event) =>
-                        onSettingsDraftChange((current) => ({
-                          ...current,
-                          binaryDecimalToBinaryChance: Number(event.target.value)
-                        }))
-                      }
-                    />
+                    <div className={styles.modeChoiceRow}>
+                      {(["2-10", "10-16", "2-16"] as const).map((pairValue) => (
+                        <button
+                          className={styles.modeChoiceButton}
+                          data-active={settingsDraft.baseConversionPair === pairValue}
+                          data-testid={`base-pair-${pairValue}`}
+                          key={pairValue}
+                          onClick={() =>
+                            onSettingsDraftChange((current) => ({
+                              ...current,
+                              baseConversionPair: pairValue
+                            }))
+                          }
+                          type="button"
+                        >
+                          {getBinaryRatioSummary(locale, pairValue)}
+                        </button>
+                      ))}
+                    </div>
                     <small className={styles.fieldNote}>{copy.binaryRatioHint}</small>
                   </div>
 
@@ -2752,6 +3048,30 @@ function RoomExperience({
                       </label>
                     ) : null}
 
+                    {settingsDraft.factorResolutionMode === "golden-bell" ? (
+                      <label
+                        className={styles.toggleCard}
+                        data-active={settingsDraft.factorGoldenBellSingleAttempt}
+                        data-testid="factor-golden-bell-single-attempt-card"
+                      >
+                        <input
+                          data-testid="factor-golden-bell-single-attempt-toggle"
+                          checked={settingsDraft.factorGoldenBellSingleAttempt}
+                          onChange={(event) =>
+                            onSettingsDraftChange((current) => ({
+                              ...current,
+                              factorGoldenBellSingleAttempt: event.target.checked
+                            }))
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong>{copy.factorGoldenBellSingleAttemptLabel}</strong>
+                          <small>{copy.factorGoldenBellSingleAttemptHint}</small>
+                        </span>
+                      </label>
+                    ) : null}
+
                     {settingsDraft.factorResolutionMode === "all-play" ? (
                       <label
                         className={styles.toggleCard}
@@ -2778,6 +3098,86 @@ function RoomExperience({
                   </div>
                 </>
               )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isHost && room.phase === "lobby" && isMatchSettingsOpen ? (
+        <div
+          className={styles.modalBackdrop}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsMatchSettingsOpen(false);
+            }
+          }}
+        >
+          <section className={styles.settingsModal} data-testid="match-settings-modal">
+            <div className={styles.modalHeader}>
+              <div className={styles.modalTitleBlock}>
+                <span className={styles.challengeLabel}>{copy.matchSettingsLabel}</span>
+                <strong>{copy.matchSettingsTitle}</strong>
+              </div>
+              <button
+                className={`${styles.secondaryAction} ${styles.modalCloseButton}`}
+                onClick={() => setIsMatchSettingsOpen(false)}
+                type="button"
+              >
+                {copy.closePanel}
+              </button>
+            </div>
+
+            <div className={styles.settingsColumn}>
+              <p className={styles.railBody}>{copy.matchSettingsBody}</p>
+
+              <div className={styles.settingsSplitGrid}>
+                <div className={`${styles.field} ${styles.rangeField}`}>
+                  <div className={styles.fieldHead}>
+                    <span>{copy.maxPlayersField}</span>
+                    <strong className={styles.rangeValue}>
+                      {matchSettingsDraft.maxPlayers}
+                      {locale === "ko" ? copy.playersUnit : ` ${copy.playersUnit}`}
+                    </strong>
+                  </div>
+                  <input
+                    className={styles.rangeInput}
+                    data-testid="match-max-players-range"
+                    type="range"
+                    min={Math.max(2, room.players.length)}
+                    max={MAX_PLAYERS_PER_ROOM}
+                    step="1"
+                    value={matchSettingsDraft.maxPlayers}
+                    onChange={(event) =>
+                      onMatchSettingsDraftChange((current) => ({
+                        ...current,
+                        maxPlayers: Number(event.target.value)
+                      }))
+                    }
+                  />
+                </div>
+
+                <label
+                  className={styles.toggleCard}
+                  data-active={matchSettingsDraft.allowMidMatchJoin}
+                  data-testid="allow-mid-match-join-card"
+                >
+                  <input
+                    data-testid="allow-mid-match-join-toggle"
+                    checked={matchSettingsDraft.allowMidMatchJoin}
+                    onChange={(event) =>
+                      onMatchSettingsDraftChange((current) => ({
+                        ...current,
+                        allowMidMatchJoin: event.target.checked
+                      }))
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>{copy.allowMidMatchJoinLabel}</strong>
+                    <small>{copy.allowMidMatchJoinHint}</small>
+                  </span>
+                </label>
+              </div>
             </div>
           </section>
         </div>
@@ -2936,37 +3336,22 @@ function areSettingsEqual(left: LobbySettings, right: LobbySettings) {
     left.mode === right.mode &&
     left.roundCount === right.roundCount &&
     left.roundTimeSec === right.roundTimeSec &&
-    left.binaryDecimalToBinaryChance === right.binaryDecimalToBinaryChance &&
+    left.baseConversionPair === right.baseConversionPair &&
     left.binaryLivePreview === right.binaryLivePreview &&
     left.factorResolutionMode === right.factorResolutionMode &&
     left.factorPrimeAnswerMode === right.factorPrimeAnswerMode &&
     left.factorOrderedAnswer === right.factorOrderedAnswer &&
     left.factorSingleAttempt === right.factorSingleAttempt &&
+    left.factorGoldenBellSingleAttempt === right.factorGoldenBellSingleAttempt &&
     left.factorSuddenDeath === right.factorSuddenDeath
   );
 }
 
-function getLobbyPlayerNote(
-  locale: Locale,
-  isHost: boolean,
-  isConnected: boolean,
-  isReady: boolean
-) {
-  if (!isConnected) {
-    return locale === "ko" ? "현재 오프라인 상태입니다." : "Currently offline.";
-  }
-
-  if (isHost) {
-    return locale === "ko"
-      ? "룰을 정하고 게임을 시작하는 플레이어입니다."
-      : "This player controls the rules and starts the match.";
-  }
-
-  if (isReady) {
-    return locale === "ko" ? "게임 시작을 기다리는 중입니다." : "Waiting for the match to begin.";
-  }
-
-  return locale === "ko" ? "준비 버튼을 누르면 바로 시작할 수 있습니다." : "Ready up to start immediately.";
+function areMatchSettingsEqual(left: MatchSettings, right: MatchSettings) {
+  return (
+    left.maxPlayers === right.maxPlayers &&
+    left.allowMidMatchJoin === right.allowMidMatchJoin
+  );
 }
 
 function getReadyButtonLabel(locale: Locale, isReady: boolean) {
@@ -3024,7 +3409,7 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
           `${getModeLabelByLocale(locale, settings.mode)}`,
           `${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
           settings.mode === "binary"
-            ? getBinaryRatioSummary(locale, settings.binaryDecimalToBinaryChance)
+            ? getBinaryRatioSummary(locale, settings.baseConversionPair)
             : "소인수는 공백으로 구분해서 입력",
           settings.mode === "binary"
             ? `실시간 변환 프리뷰: ${settings.binaryLivePreview ? "켜짐" : "꺼짐"}`
@@ -3055,7 +3440,9 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
             ? "시간 안에 아무도 못 맞추면 서든데스로 전환"
             : "",
           settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
-            ? `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점`
+            ? settings.factorGoldenBellSingleAttempt
+              ? `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 잠김`
+              : `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 재도전 가능`
             : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
               ? "첫 정답이 나오면 즉시 공개 단계로 이동"
               : "시간 종료 또는 전원 정답 시 공개 단계로 이동"
@@ -3064,7 +3451,7 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
           `${getModeLabelByLocale(locale, settings.mode)}`,
           `${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
           settings.mode === "binary"
-            ? getBinaryRatioSummary(locale, settings.binaryDecimalToBinaryChance)
+            ? getBinaryRatioSummary(locale, settings.baseConversionPair)
             : "Separate prime factors with spaces",
           settings.mode === "binary"
             ? `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`
@@ -3095,7 +3482,9 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
             ? "If nobody solves in time, the room flips into sudden death"
             : "",
           settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
-            ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}`
+            ? settings.factorGoldenBellSingleAttempt
+              ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · locks after one miss`
+              : `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · retries allowed`
             : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
               ? "The first correct answer immediately triggers reveal"
               : "Reveal happens on timeout or when everyone is correct"
@@ -3105,10 +3494,6 @@ function getRuleLines(locale: Locale, settings: LobbySettings) {
 }
 
 function getRoundTimeSummary(locale: Locale, settings: LobbySettings) {
-  if (settings.mode === "factor" && settings.factorResolutionMode === "golden-bell") {
-    return locale === "ko" ? getCopy(locale).untimedLabel : getCopy(locale).untimedLabel;
-  }
-
   return locale === "ko"
     ? `${settings.roundTimeSec}${getCopy(locale).secondsUnit} 제한`
     : `${settings.roundTimeSec}s`;
@@ -3241,6 +3626,10 @@ function getBinaryPreviewText(
     return "";
   }
 
+  if (typeof meta.sourceBase === "number") {
+    return `${getBaseDisplayLabel(locale, meta.sourceBase)} ${previewValue}`;
+  }
+
   return meta.direction === "decimal-to-binary"
     ? locale === "ko"
       ? `10진수 ${previewValue}`
@@ -3248,6 +3637,42 @@ function getBinaryPreviewText(
     : locale === "ko"
       ? `2진수 ${previewValue}`
       : `binary ${previewValue}`;
+}
+
+function getBaseDisplayLabel(locale: Locale, base: 2 | 10 | 16) {
+  if (locale === "ko") {
+    if (base === 16) {
+      return "16진수";
+    }
+
+    return `${base}진수`;
+  }
+
+  if (base === 2) {
+    return "binary";
+  }
+
+  if (base === 16) {
+    return "hex";
+  }
+
+  return "decimal";
+}
+
+function getBaseConversionPlaceholder(meta?: BinaryChallengeMeta) {
+  if (meta?.targetBase === 16) {
+    return "2F";
+  }
+
+  if (meta?.targetBase === 10) {
+    return "57";
+  }
+
+  if (meta?.targetBase === 2) {
+    return "101011";
+  }
+
+  return "101011 / 2F / 57";
 }
 
 function getRoundBoardStatus(locale: Locale, status?: PlayerRoundStatus | null) {
@@ -3296,6 +3721,59 @@ function getLeaderboardState(status?: PlayerRoundStatus | null) {
   }
 
   return "waiting";
+}
+
+function createFloatingPrimeDecorations() {
+  const primePool = createPrimePool(997);
+  let seed = 51018;
+  const columns = 8;
+  const rows = 12;
+
+  return Array.from({ length: columns * rows }, (_, index) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const prime = primePool[seed % primePool.length] ?? 2;
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const topJitter = ((seed % 1000) / 1000 - 0.5) * 3.4;
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const leftJitter = ((seed % 1000) / 1000 - 0.5) * 4.1;
+    const top = 6 + row * 7.6 + topJitter;
+    const left = 5 + column * 11.6 + leftJitter;
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const duration = 16 + (seed % 15);
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const delay = -(seed % 18);
+
+    return {
+      text: String(prime),
+      top: `${top.toFixed(2)}%`,
+      left: `${left.toFixed(2)}%`,
+      duration: `${duration}s`,
+      delay: `${delay}s`,
+      size: `${0.62 + ((index % 5) * 0.08)}rem`
+    };
+  });
+}
+
+function createPrimePool(limit: number) {
+  const primes: number[] = [];
+
+  for (let candidate = 2; candidate <= limit; candidate += 1) {
+    let isPrime = true;
+    for (let divisor = 2; divisor * divisor <= candidate; divisor += 1) {
+      if (candidate % divisor === 0) {
+        isPrime = false;
+        break;
+      }
+    }
+
+    if (isPrime) {
+      primes.push(candidate);
+    }
+  }
+
+  return primes;
 }
 
 function ThemeModeIcon({ mode }: { mode: "light" | "dark" }) {
@@ -3384,6 +3862,10 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko" ? "<게임이 시작되었습니다>" : "<Match started>";
   }
 
+  if (entry.systemKey === "round-started") {
+    return locale === "ko" ? "<새 라운드가 시작되었습니다>" : "<New round started>";
+  }
+
   if (entry.systemKey === "player-correct") {
     return locale === "ko"
       ? `${entry.playerName ?? "플레이어"}님이 정답을 맞췄습니다.`
@@ -3394,6 +3876,30 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko"
       ? `${entry.playerName ?? "플레이어"}님이 오답을 제시했습니다.\n[입력 값 : ${entry.answerText ?? "-"}]`
       : `${entry.playerName ?? "A player"} submitted a wrong answer.\n[Input: ${entry.answerText ?? "-"}]`;
+  }
+
+  if (entry.systemKey === "spectator-joined") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "관전자"}님이 관전자로 들어왔습니다.`
+      : `${entry.playerName ?? "A spectator"} joined as a spectator.`;
+  }
+
+  if (entry.systemKey === "player-left") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 방을 나갔습니다.`
+      : `${entry.playerName ?? "A player"} left the room.`;
+  }
+
+  if (entry.systemKey === "spectator-left") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "관전자"}님이 관전을 종료했습니다.`
+      : `${entry.playerName ?? "A spectator"} stopped spectating.`;
+  }
+
+  if (entry.systemKey === "host-transferred") {
+    return locale === "ko"
+      ? `${entry.playerName ?? "플레이어"}님이 새 방장이 되었습니다.`
+      : `${entry.playerName ?? "A player"} is now the host.`;
   }
 
   return entry.text;

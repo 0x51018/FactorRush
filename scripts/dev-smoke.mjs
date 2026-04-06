@@ -41,7 +41,7 @@ async function runPresenceScenario() {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -107,7 +107,7 @@ async function runSpectatorScenario() {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -191,7 +191,7 @@ async function runScenario(mode) {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        binaryDecimalToBinaryChance: 50
+        baseConversionPair: "2-10"
       }
     });
 
@@ -221,7 +221,7 @@ async function runScenario(mode) {
           mode: "binary",
           roundCount: 3,
           roundTimeSec: 20,
-          binaryDecimalToBinaryChance: 100
+          baseConversionPair: "2-10"
         }
       });
 
@@ -295,7 +295,8 @@ async function runGoldenBellScenario() {
         mode: "factor",
         roundCount: 3,
         roundTimeSec: 20,
-        factorResolutionMode: "golden-bell"
+        factorResolutionMode: "golden-bell",
+        factorGoldenBellSingleAttempt: true
       }
     });
 
@@ -318,8 +319,12 @@ async function runGoldenBellScenario() {
     const activeState = await hostObserver.waitFor(
       (state) => state.phase === "round-active" && state.settings.factorResolutionMode === "golden-bell"
     );
-    if (activeState.round?.hasRoundTimer !== false) {
-      throw new Error("골든벨 라운드는 전체 타이머 없이 시작되어야 합니다.");
+    if (activeState.round?.hasRoundTimer !== true) {
+      throw new Error("Golden bell round should start with the main timer enabled.");
+    }
+
+    if (activeState.round?.isMainTimerPaused) {
+      throw new Error("Golden bell main timer should not be paused before a claim.");
     }
 
     await emitAck(host, "round:claim-answer", { roomId: created.roomId });
@@ -518,6 +523,30 @@ function deriveAnswer(prompt) {
     return factorize(Number(factorMatch[1]));
   }
 
+  const baseConversionMatch = prompt.match(
+    /^Convert ([0-9A-F]+) from (binary|decimal|hexadecimal) to (binary|decimal|hexadecimal)\.$/i
+  );
+  if (baseConversionMatch?.[1] && baseConversionMatch[2] && baseConversionMatch[3]) {
+    const [, rawValue, sourceLabel, targetLabel] = baseConversionMatch;
+    const sourceBase = parseBaseLabel(sourceLabel);
+    const targetBase = parseBaseLabel(targetLabel);
+    const decimalValue = parseInt(rawValue, sourceBase);
+    return targetBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(targetBase);
+  }
+
+  const numberedBaseConversionMatch = prompt.match(/^Convert ([0-9A-F]+) from base (2|10|16) to base (2|10|16)\.$/i);
+  if (
+    numberedBaseConversionMatch?.[1] &&
+    numberedBaseConversionMatch[2] &&
+    numberedBaseConversionMatch[3]
+  ) {
+    const [, rawValue, sourceBaseLabel, targetBaseLabel] = numberedBaseConversionMatch;
+    const sourceBase = Number(sourceBaseLabel);
+    const targetBase = Number(targetBaseLabel);
+    const decimalValue = parseInt(rawValue, sourceBase);
+    return targetBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(targetBase);
+  }
+
   const decimalToBinaryMatch = prompt.match(/^Convert (\d+) to binary\.$/);
   if (decimalToBinaryMatch?.[1]) {
     return Number(decimalToBinaryMatch[1]).toString(2);
@@ -549,6 +578,19 @@ function factorize(value) {
   }
 
   return factors.join(" ");
+}
+
+function parseBaseLabel(label) {
+  const normalized = label.toLowerCase();
+  if (normalized === "binary") {
+    return 2;
+  }
+
+  if (normalized === "hexadecimal") {
+    return 16;
+  }
+
+  return 10;
 }
 
 main().catch((error) => {
