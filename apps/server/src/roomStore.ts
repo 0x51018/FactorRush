@@ -32,6 +32,7 @@ import {
   GOLDEN_BELL_WINDOW_MS,
   MATCH_MAX_DURATION_MS,
   generateChallenge,
+  type KickPlayerRequest,
   sanitizeChatMessage,
   sanitizePlayerName,
   sanitizeRoomId,
@@ -144,6 +145,8 @@ const RESULTS_AUTO_RESET_MS = 15000;
 const RECONNECT_GRACE_MS = 12_000;
 const CHAT_RATE_LIMIT_WINDOW_MS = 10_000;
 const CHAT_RATE_LIMIT_MAX_MESSAGES = 5;
+type PlayerRemovalReason = "left" | "kicked";
+
 export class RoomStore {
   // rooms: 실제 방 상태 저장소
   private readonly rooms = new Map<string, RoomRecord>();
@@ -349,6 +352,10 @@ export class RoomStore {
         room.message = `${playerName} joined the match in progress.`;
         room.messageKey = "round-live";
         room.messagePlayerName = playerName;
+        this.addSystemChatMessage(room, {
+          systemKey: "player-joined",
+          playerName
+        });
         this.emitRoom(room);
 
         return {
@@ -411,6 +418,10 @@ export class RoomStore {
 
     this.socketToSeat.set(socket.id, { roomId, memberId: playerId, role: "player" });
     socket.join(roomId);
+    this.addSystemChatMessage(room, {
+      systemKey: "player-joined",
+      playerName
+    });
     this.emitRoom(room);
 
     return {
@@ -719,6 +730,39 @@ export class RoomStore {
     });
     this.emitRoom(room);
 
+    return { ok: true, data: null };
+  }
+
+  kickPlayer(socket: Socket, request: KickPlayerRequest): SocketAck<null> {
+    const membership = this.getPlayerMembership(socket.id, request.roomId);
+    if (!membership.ok) {
+      return membership;
+    }
+
+    const { room, player } = membership.data;
+    if (!player.isHost) {
+      return { ok: false, error: "Only the host can remove players from the room." };
+    }
+
+    if (room.phase !== "lobby") {
+      return { ok: false, error: "Player removal is only available in the lobby." };
+    }
+
+    const kickedPlayer = room.players.find(
+      (candidate) => candidate.id === request.playerId && candidate.connected
+    );
+    if (!kickedPlayer || kickedPlayer.id === player.id) {
+      return { ok: false, error: "Choose another connected player to remove from the room." };
+    }
+
+    if (kickedPlayer.socketId) {
+      const kickedSocket = this.io.sockets.sockets.get(kickedPlayer.socketId);
+      kickedSocket?.emit("room:kicked", { roomId: room.roomId });
+      kickedSocket?.leave(room.roomId);
+      this.socketToSeat.delete(kickedPlayer.socketId);
+    }
+
+    this.removePlayerImmediately(room, kickedPlayer.id, "kicked");
     return { ok: true, data: null };
   }
 
@@ -1666,7 +1710,7 @@ export class RoomStore {
     this.emitRoom(room);
   }
 
-  private removePlayerImmediately(room: RoomRecord, playerId: string) {
+  private removePlayerImmediately(room: RoomRecord, playerId: string, reason: PlayerRemovalReason = "left") {
     const player = room.players.find((candidate) => candidate.id === playerId);
     if (!player) {
       return;
@@ -1702,11 +1746,12 @@ export class RoomStore {
       this.promoteNextHost(room);
     }
 
-    room.message = `${removedName} left the room.`;
-    room.messageKey = "player-left";
+    room.message =
+      reason === "kicked" ? `${removedName} was removed from the room.` : `${removedName} left the room.`;
+    room.messageKey = reason === "kicked" ? "player-kicked" : "player-left";
     room.messagePlayerName = removedName;
     this.addSystemChatMessage(room, {
-      systemKey: "player-left",
+      systemKey: reason === "kicked" ? "player-kicked" : "player-left",
       playerName: removedName
     });
     this.emitRoom(room);
