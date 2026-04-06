@@ -1,6 +1,8 @@
 import {
+  type BaseConversionPair,
   FACTOR_PRIME_SHOUT,
   type BinaryChallengeMeta,
+  type ConversionBase,
   type FactorResolutionMode,
   type GameMode,
   type PrimeFactorChallengeMeta,
@@ -50,8 +52,8 @@ const COPY = {
     gameModeField: "게임 모드",
     roundCountField: "라운드 수",
     timeLimitField: "제한 시간",
-    binaryRatioField: "10진수 -> 2진수 비율",
-    binaryRatioHint: "0%는 항상 2진수 -> 10진수, 100%는 항상 10진수 -> 2진수입니다.",
+    binaryRatioField: "변환 쌍",
+    binaryRatioHint: "선택한 두 진법 중 한 방향이 매 라운드마다 랜덤으로 출제됩니다.",
     binaryPreviewToggle: "실시간 변환 프리뷰",
     binaryPreviewHint: "입력 중인 값을 반대 진법으로 바로 보여줍니다.",
     binaryPreviewLabel: "예상 변환",
@@ -61,7 +63,7 @@ const COPY = {
     factorResolutionGoldenBell: "골든벨 모드",
     factorResolutionAllPlayBody: "모든 플레이어가 끝까지 동시에 정답을 입력하는 기본 대결 방식입니다.",
     factorResolutionFirstCorrectBody: "가장 먼저 정답을 맞힌 플레이어가 나오면 즉시 공개 단계로 넘어갑니다.",
-    factorResolutionGoldenBellBody: "정답 외치기에 먼저 성공한 플레이어만 짧은 답변권을 가져갑니다.",
+    factorResolutionGoldenBellBody: "정답 외치기에 먼저 성공한 플레이어가 답변권을 가져가며, 기본값은 오답 후에도 다시 도전할 수 있습니다.",
     factorSuddenDeathLabel: "서든데스 연장",
     factorSuddenDeathHint: "기본 모드에서 시간 안에 아무도 못 맞추면, 이후 첫 정답자 1명만 점수를 얻습니다.",
     factorPrimeAnswerField: "소수 문제 정답",
@@ -73,10 +75,12 @@ const COPY = {
     factorOrderedHint: "같은 수라도 제시된 순서를 유지해야 정답 처리됩니다.",
     factorSingleAttemptLabel: "정답 시도 기회 1회 제한",
     factorSingleAttemptHint: "한 번 틀리면 이번 라운드에서는 더 이상 정답을 제출할 수 없습니다.",
+    factorGoldenBellSingleAttemptLabel: "골든벨 오답 후 재도전 금지",
+    factorGoldenBellSingleAttemptHint: "끄면 오답 패널티를 받고 다시 외칠 수 있고, 켜면 한 번 틀린 뒤 해당 라운드에서 잠깁니다.",
     roundsUnit: "라운드",
     secondsUnit: "초",
     untimedLabel: "무제한",
-    goldenBellUntimedHint: "골든벨은 전체 라운드 제한 없이, 답변권을 잡은 사람에게만 10초를 줍니다.",
+    goldenBellUntimedHint: "골든벨은 메인 라운드 시간이 흐르다가 외치기 성공 시 잠시 멈추고, 그동안 10초 답변권만 따로 흐릅니다.",
     suddenDeathLive: "서든데스",
     goldenBellLive: "답변권 10초",
     lobbyRosterLabel: "참가 명단",
@@ -109,7 +113,18 @@ const COPY = {
     lobbyChatBody: "대기 중인 동안 바로 이야기를 나눌 수 있습니다.",
     lobbyStartHint: "모두 준비되면 시작하세요. 설정은 언제든 다시 열 수 있습니다.",
     openSettings: "설정 열기",
+    openGameSettings: "게임 설정",
+    openMatchSettings: "매치 설정",
+    matchSettingsLabel: "매치 설정",
+    matchSettingsTitle: "인원 및 입장 정책",
+    matchSettingsBody: "게임 규칙과 별개로, 이 방이 몇 명까지 받는지와 경기 도중 링크 입장을 어떻게 처리할지 정합니다.",
+    maxPlayersField: "최대 플레이어 수",
+    allowMidMatchJoinLabel: "게임 도중 링크 입장도 즉시 참여로 처리",
+    allowMidMatchJoinHint:
+      "켜면 라운드 진행 중 들어온 사람도 바로 플레이어로 합류하고, 점수는 현재 참가자 최저 점수로 시작합니다.",
     closePanel: "닫기",
+    leaveRoom: "방 나가기",
+    leavingRoom: "나가는 중..",
     transferHost: "방장 위임",
     renameNickname: "닉네임 변경",
     liveBoardLabel: "실시간 대결",
@@ -156,7 +171,7 @@ const COPY = {
     answerHintFactorPrimeNumber: "(공백 구분 · 소수면 수 하나만 입력)",
     answerRevealLabel: "정답 공개",
     answerPlaceholderFactor: "2 2 3 7",
-    answerPlaceholderBinary: "101011",
+    answerPlaceholderBinary: "101011 / 2F / 57",
     submitAnswer: "정답 제출",
     claimAnswerTurn: "정답 외치기",
     claimingAnswerTurn: "외치는 중...",
@@ -239,8 +254,8 @@ const COPY = {
     gameModeField: "Game mode",
     roundCountField: "Round count",
     timeLimitField: "Time limit",
-    binaryRatioField: "Decimal -> binary ratio",
-    binaryRatioHint: "0% means binary -> decimal only, and 100% means decimal -> binary only.",
+    binaryRatioField: "Conversion pair",
+    binaryRatioHint: "Each round randomly picks one direction from the selected pair.",
     binaryPreviewToggle: "Live conversion preview",
     binaryPreviewHint: "Show the opposite-base conversion while typing.",
     binaryPreviewLabel: "Predicted conversion",
@@ -250,7 +265,7 @@ const COPY = {
     factorResolutionGoldenBell: "Golden bell mode",
     factorResolutionAllPlayBody: "Everyone keeps submitting answers until the round naturally ends.",
     factorResolutionFirstCorrectBody: "The first correct answer immediately pushes the room into reveal.",
-    factorResolutionGoldenBellBody: "Only the player who buzzes first earns a short answer window.",
+    factorResolutionGoldenBellBody: "The first player to buzz gets the answer turn, and by default wrong answers can buzz again after the penalty.",
     factorSuddenDeathLabel: "Sudden death extension",
     factorSuddenDeathHint: "If nobody solves the timed all-play round, the room switches to first-solver sudden death.",
     factorPrimeAnswerField: "Prime target answer",
@@ -262,10 +277,12 @@ const COPY = {
     factorOrderedHint: "The same factors in a different order will no longer count as correct.",
     factorSingleAttemptLabel: "Limit answer attempts to one try",
     factorSingleAttemptHint: "After one wrong answer, that player is locked out for the round.",
+    factorGoldenBellSingleAttemptLabel: "Lock golden bell after one miss",
+    factorGoldenBellSingleAttemptHint: "When off, players can buzz again after the penalty. When on, one wrong answer locks that round.",
     roundsUnit: "rounds",
     secondsUnit: "seconds",
     untimedLabel: "untimed",
-    goldenBellUntimedHint: "Golden bell removes the global round timer and only keeps the 10-second answer window.",
+    goldenBellUntimedHint: "Golden bell keeps the main round clock running, pauses it during a claimed 10-second answer window, and then resumes it.",
     suddenDeathLive: "Sudden death",
     goldenBellLive: "10s answer turn",
     lobbyRosterLabel: "Roster",
@@ -298,7 +315,19 @@ const COPY = {
     lobbyChatBody: "Talk while the room is getting ready.",
     lobbyStartHint: "Start as soon as everyone is ready. You can reopen the settings at any time.",
     openSettings: "Open settings",
+    openGameSettings: "Game settings",
+    openMatchSettings: "Match settings",
+    matchSettingsLabel: "Match settings",
+    matchSettingsTitle: "Seats and join policy",
+    matchSettingsBody:
+      "These options are separate from the game rules and control room capacity plus how invite links behave once a match is already running.",
+    maxPlayersField: "Player cap",
+    allowMidMatchJoinLabel: "Let invite joins enter the current match immediately",
+    allowMidMatchJoinHint:
+      "When enabled, late joiners become players right away and start on the current lowest score in the room.",
     closePanel: "Close",
+    leaveRoom: "Leave room",
+    leavingRoom: "Leaving...",
     transferHost: "Transfer host",
     renameNickname: "Rename nickname",
     liveBoardLabel: "Live race",
@@ -345,7 +374,7 @@ const COPY = {
     answerHintFactorPrimeNumber: "(Use spaces · if prime, enter the number only)",
     answerRevealLabel: "Answer reveal",
     answerPlaceholderFactor: "2 2 3 7",
-    answerPlaceholderBinary: "101011",
+    answerPlaceholderBinary: "101011 / 2F / 57",
     submitAnswer: "Submit answer",
     claimAnswerTurn: "Buzz for answer",
     claimingAnswerTurn: "Buzzing...",
@@ -405,6 +434,10 @@ export function getCopy(locale: Locale) {
 }
 
 export function getModeLabelByLocale(locale: Locale, mode: GameMode) {
+  if (mode === "binary") {
+    return locale === "ko" ? "Base Conversion 모드" : "Base Conversion Mode";
+  }
+
   if (locale === "ko") {
     return mode === "factor" ? "Prime Factor 모드" : "Decimal / Binary 모드";
   }
@@ -413,6 +446,12 @@ export function getModeLabelByLocale(locale: Locale, mode: GameMode) {
 }
 
 export function getModeDescriptionByLocale(locale: Locale, mode: GameMode) {
+  if (mode === "binary") {
+    return locale === "ko"
+      ? "2진수, 10진수, 16진수 사이를 가장 빠르게 변환하세요."
+      : "Convert between base 2, 10, and 16 faster than everyone else.";
+  }
+
   if (locale === "ko") {
     return mode === "factor"
       ? "제시된 수를 가장 빠르게 소인수분해하세요."
@@ -424,7 +463,19 @@ export function getModeDescriptionByLocale(locale: Locale, mode: GameMode) {
     : "Swap between decimal and binary before the room does.";
 }
 
-export function getBinaryRatioSummary(locale: Locale, chance: number) {
+export function getBinaryRatioSummary(locale: Locale, chance: number | BaseConversionPair) {
+  if (typeof chance === "string") {
+    if (chance === "10-16") {
+      return "10 ↔ 16";
+    }
+
+    if (chance === "2-16") {
+      return "2 ↔ 16";
+    }
+
+    return "2 ↔ 10";
+  }
+
   const clampedChance = Math.max(0, Math.min(100, Math.round(chance)));
 
   if (locale === "ko") {
@@ -505,6 +556,18 @@ export function getChallengeCopy(locale: Locale, round: Pick<RoundSnapshot, "mod
   }
 
   const meta = round.challengeMeta as BinaryChallengeMeta;
+  if (typeof meta.sourceBase === "number" && typeof meta.targetBase === "number") {
+    const sourceLabel = getBaseLabel(locale, meta.sourceBase);
+    const targetLabel = getBaseLabel(locale, meta.targetBase);
+    return {
+      prompt:
+        locale === "ko"
+          ? `${sourceLabel} ${meta.sourceValue}를 ${targetLabel}로 바꾸세요.`
+          : `Convert ${meta.sourceValue} from ${sourceLabel} to ${targetLabel}.`,
+      helper: getBaseHelperByLocale(locale, meta.targetBase)
+    };
+  }
+
   if (meta.direction === "decimal-to-binary") {
     return {
       prompt:
@@ -543,7 +606,7 @@ export function getRoomMessageByLocale(
       "settings-updated": "변경된 룰이 적용되었습니다.",
       "settings-updated-reset-ready": "변경된 룰이 적용되었습니다.",
       "round-live": "라운드가 시작되었습니다. 빠르게 맞힐수록 점수를 더 받습니다.",
-      "golden-bell-open": "골든벨 모드입니다. 전체 제한 없이 먼저 정답 외치기에 성공한 사람이 10초 답변권을 가집니다.",
+      "golden-bell-open": "골든벨 모드입니다. 메인 시간 안에 먼저 정답 외치기에 성공한 사람이 10초 답변권을 가집니다.",
       "golden-bell-claimed": `${actor}님이 정답 외치기에 성공했습니다.`,
       "golden-bell-wrong": `${actor}님이 골든벨 기회를 놓쳐 점수가 깎였습니다.`,
       "golden-bell-timeout": `${actor}님이 골든벨 제한 시간 안에 답하지 못했습니다.`,
@@ -565,7 +628,7 @@ export function getRoomMessageByLocale(
       "settings-updated": "Updated rules applied.",
       "settings-updated-reset-ready": "Updated rules applied.",
       "round-live": "The round is live. Faster correct answers earn more points.",
-      "golden-bell-open": "Golden bell mode is live. There is no round timer, and the first buzz gets a 10-second answer turn.",
+      "golden-bell-open": "Golden bell mode is live. The main round timer pauses during each claimed 10-second answer turn.",
       "golden-bell-claimed": `${actor} claimed the answer turn.`,
       "golden-bell-wrong": `${actor} missed the golden bell answer and lost points.`,
       "golden-bell-timeout": `${actor} ran out of time on the golden bell turn.`,
@@ -585,4 +648,48 @@ export function getRoomMessageByLocale(
   } as const;
 
   return messages[locale][messageKey];
+}
+
+function getBaseLabel(locale: Locale, base: ConversionBase) {
+  if (locale === "ko") {
+    if (base === 16) {
+      return "16진수";
+    }
+
+    return `${base}진수`;
+  }
+
+  if (base === 2) {
+    return "binary";
+  }
+
+  if (base === 16) {
+    return "hexadecimal";
+  }
+
+  return "decimal";
+}
+
+function getBaseHelperByLocale(locale: Locale, base: ConversionBase) {
+  if (locale === "ko") {
+    if (base === 2) {
+      return "0b 없이 입력하세요. 예: 101011";
+    }
+
+    if (base === 16) {
+      return "0x 없이 16진수로 입력하세요. 예: 2F";
+    }
+
+    return "10진수 숫자만 입력하세요.";
+  }
+
+  if (base === 2) {
+    return "Enter the binary digits without 0b. Example: 101011.";
+  }
+
+  if (base === 16) {
+    return "Use hexadecimal digits without 0x. Example: 2F.";
+  }
+
+  return "Enter the base-10 number only.";
 }

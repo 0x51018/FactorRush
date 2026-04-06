@@ -33,18 +33,17 @@ function factorize(value: number) {
   return factors.join(" ");
 }
 
-function solveBinaryPrompt(prompt: string) {
-  const value = extractFirstNumber(prompt);
-  if (/to binary/i.test(prompt)) {
-    return value.toString(2);
+function solveBaseConversionPrompt(prompt: string) {
+  const match = prompt.match(/Convert ([0-9A-F]+) from (binary|decimal|hexadecimal) to (binary|decimal|hexadecimal)\./i);
+  if (!match) {
+    throw new Error(`Unsupported base-conversion prompt: ${prompt}`);
   }
 
-  const binaryMatch = prompt.match(/[01]{3,}/);
-  if (!binaryMatch) {
-    throw new Error(`No binary input found in prompt: ${prompt}`);
-  }
-
-  return String(parseInt(binaryMatch[0], 2));
+  const [, rawValue, sourceLabel, targetLabel] = match;
+  const sourceBase = sourceLabel.toLowerCase() === "binary" ? 2 : sourceLabel.toLowerCase() === "hexadecimal" ? 16 : 10;
+  const targetBase = targetLabel.toLowerCase() === "binary" ? 2 : targetLabel.toLowerCase() === "hexadecimal" ? 16 : 10;
+  const decimalValue = parseInt(rawValue, sourceBase);
+  return targetBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(targetBase);
 }
 
 async function setRangeValue(locator: Locator, value: number) {
@@ -115,6 +114,16 @@ test("landing keeps both forms inside a 720p viewport", async ({ page }) => {
   });
 
   expect(hydrationErrors).toHaveLength(0);
+});
+
+test("nickname input sanitizes length and disallowed characters", async ({ page }) => {
+  await switchToEnglish(page);
+
+  await page.getByTestId("create-name-input").fill("Alpha<>Beta??1234567890");
+  await expect(page.getByTestId("create-name-input")).toHaveValue("AlphaBeta123456");
+
+  await page.getByTestId("create-room-button").click();
+  await expect(page.getByTestId("room-name-button")).toContainText("AlphaBeta123456");
 });
 
 test("invite flow, ready gate, factor options, and final results all work together", async ({
@@ -283,6 +292,7 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
 
   await hostPage.getByTestId("settings-button").click();
   await hostPage.getByTestId("factor-resolution-golden-bell").click();
+  await hostPage.getByTestId("factor-golden-bell-single-attempt-card").click();
   await hostPage.getByRole("button", { name: "Close" }).click();
 
   await guestPage.getByTestId("ready-button").click();
@@ -290,10 +300,12 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
 
   await expect(hostPage.getByTestId("claim-answer-button")).toBeVisible();
   await expect(guestPage.getByTestId("claim-answer-button")).toBeVisible();
+  await expect(hostPage.getByTestId("submit-answer-button")).toBeDisabled();
+  await expect(guestPage.getByTestId("submit-answer-button")).toBeDisabled();
 
   await hostPage.getByTestId("claim-answer-button").click();
   await expect(hostPage.getByTestId("answer-input")).toBeVisible();
-  await expect(guestPage.getByTestId("golden-bell-waiting-panel")).toContainText("BellHost");
+  await expect(guestPage.locator("body")).toContainText("BellHost");
 
   await hostPage.getByTestId("answer-input").fill("4 4");
   await hostPage.getByTestId("submit-answer-button").click();
@@ -308,6 +320,121 @@ test("golden bell mode gates the answer turn and penalizes a failed caller", asy
   await guestPage.getByTestId("answer-input").fill(factorize(extractFirstNumber(prompt)));
   await guestPage.getByTestId("submit-answer-button").click();
   await expect(guestPage.getByTestId("round-reveal-panel")).toBeVisible();
+
+  await hostContext.close();
+  await guestContext.close();
+});
+
+test("golden bell keeps the input visible before buzzing and allows retries by default", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("RetryHost");
+  await hostPage.getByTestId("create-room-button").click();
+  await hostPage.getByTestId("settings-button").click();
+  await hostPage.getByTestId("factor-resolution-golden-bell").click();
+  await hostPage.getByRole("button", { name: "Close" }).click();
+  await hostPage.getByTestId("start-button").click();
+
+  await expect(hostPage.getByTestId("golden-bell-answer-panel")).toBeVisible();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+  await expect(hostPage.getByTestId("submit-answer-button")).toBeDisabled();
+
+  await hostPage.getByTestId("answer-input").fill("4 4");
+  await hostPage.getByTestId("claim-answer-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toHaveValue("4 4");
+  await expect(hostPage.getByTestId("submit-answer-button")).toBeVisible();
+
+  await hostPage.getByTestId("submit-answer-button").click();
+  await expect(hostPage.locator("body")).toContainText("60 points were deducted");
+  await expect(hostPage.getByTestId("locked-panel")).toHaveCount(0);
+  await expect(hostPage.getByTestId("claim-answer-button")).toBeVisible({ timeout: 5_000 });
+
+  await hostContext.close();
+});
+
+test("golden bell blocks immediate reclaims by the same player until another player claims", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("TimerHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("TimerGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+
+  await hostPage.getByTestId("settings-button").click();
+  await hostPage.getByTestId("factor-resolution-golden-bell").click();
+  await setRangeValue(hostPage.getByTestId("time-limit-range"), 15);
+  await hostPage.getByRole("button", { name: "Close" }).click();
+
+  await guestPage.getByTestId("ready-button").click();
+  await hostPage.getByTestId("start-button").click();
+
+  await hostPage.getByTestId("claim-answer-button").click();
+  await expect(hostPage.getByTestId("claim-answer-button")).toBeDisabled();
+
+  await hostPage.getByTestId("answer-input").fill("4 4");
+  await hostPage.getByTestId("submit-answer-button").click();
+
+  await expect(hostPage.getByTestId("claim-answer-button")).toBeDisabled();
+  await guestPage.getByTestId("claim-answer-button").click();
+  await expect(hostPage.getByTestId("claim-answer-button")).toBeDisabled();
+  await guestPage.getByTestId("answer-input").fill("4 4");
+  await guestPage.getByTestId("submit-answer-button").click();
+  await expect(hostPage.getByTestId("claim-answer-button")).toBeEnabled();
+
+  await hostContext.close();
+  await guestContext.close();
+});
+
+test("golden bell moves to the next round when nobody solves before the main timer expires", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("ClockHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("ClockGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+
+  await hostPage.getByTestId("settings-button").click();
+  await hostPage.getByTestId("factor-resolution-golden-bell").click();
+  await setRangeValue(hostPage.getByTestId("time-limit-range"), 15);
+  await hostPage.getByRole("button", { name: "Close" }).click();
+
+  await guestPage.getByTestId("ready-button").click();
+  await hostPage.getByTestId("start-button").click();
+
+  const firstPrompt = (await hostPage.locator("h4").first().textContent()) ?? "";
+  await expect
+    .poll(async () => ((await hostPage.locator("h4").first().textContent()) ?? "") !== firstPrompt, {
+      timeout: 22_000
+    })
+    .toBeTruthy();
 
   await hostContext.close();
   await guestContext.close();
@@ -438,7 +565,51 @@ test("mid-match joiners spectate first and can take a player seat back in the lo
   await spectatorContext.close();
 });
 
-test("binary mode can be forced to decimal to binary", async ({ page }) => {
+test("mid-match joiners can enter as players immediately when match settings allow it", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const lateContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+  const latePage = await lateContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("LateHost");
+  await hostPage.getByTestId("create-room-button").click();
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+
+  await hostPage.getByTestId("match-settings-button").click();
+  await hostPage.getByTestId("allow-mid-match-join-card").click();
+  await hostPage.getByRole("button", { name: "Close" }).click();
+
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("LateGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await guestPage.getByTestId("ready-button").click();
+
+  await hostPage.getByTestId("start-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+
+  await latePage.goto(inviteUrl);
+  await expect(latePage.getByTestId("invite-name-input")).toBeVisible();
+  await latePage.getByTestId("invite-name-input").fill("LateEntry");
+  await latePage.getByTestId("invite-join-button").click();
+
+  await expect(latePage.getByTestId("answer-input")).toBeVisible();
+  await expect(latePage.getByTestId("spectator-panel")).toHaveCount(0);
+  await expect(hostPage.locator("body")).toContainText("LateEntry");
+
+  await hostContext.close();
+  await guestContext.close();
+  await lateContext.close();
+});
+
+test("base conversion mode supports fixed conversion pairs", async ({ page }) => {
   await switchToEnglish(page);
   await page.getByTestId("create-name-input").fill("BinarySolo");
   await page.getByTestId("create-mode-binary").click();
@@ -446,7 +617,7 @@ test("binary mode can be forced to decimal to binary", async ({ page }) => {
 
   await page.getByTestId("settings-button").click();
   await page.getByTestId("settings-mode-binary").click();
-  await setRangeValue(page.getByTestId("binary-ratio-range"), 100);
+  await page.getByTestId("base-pair-2-10").click();
   await expect(page.getByTestId("binary-preview-toggle")).toBeChecked();
   await page.getByRole("button", { name: "Close" }).click();
 
@@ -454,11 +625,11 @@ test("binary mode can be forced to decimal to binary", async ({ page }) => {
   await expect(page.getByTestId("answer-input")).toBeVisible();
 
   const prompt = (await page.locator("h4").first().textContent()) ?? "";
-  expect(prompt).toMatch(/to binary/i);
+  expect(prompt).toMatch(/from (binary|decimal) to (binary|decimal)\./i);
 
   await page.getByTestId("answer-input").fill("1010");
-  await expect(page.getByTestId("binary-preview")).toContainText("decimal 10");
-  await page.getByTestId("answer-input").fill(solveBinaryPrompt(prompt));
+  await expect(page.getByTestId("binary-preview")).toContainText(/(decimal|binary) 10/i);
+  await page.getByTestId("answer-input").fill(solveBaseConversionPrompt(prompt));
   await page.getByTestId("submit-answer-button").click();
   await expect(page.getByTestId("round-reveal-panel")).toBeVisible();
 
@@ -466,4 +637,29 @@ test("binary mode can be forced to decimal to binary", async ({ page }) => {
     path: ".codex-artifacts/qa-binary.png",
     fullPage: true
   });
+});
+
+test("players can leave from the lobby and return to the main screen", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("LeaveHost");
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("invite-name-input")).toBeVisible();
+  await guestPage.getByTestId("invite-name-input").fill("LeaveGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await expect(guestPage.getByTestId("leave-room-button")).toBeVisible();
+
+  await guestPage.getByTestId("leave-room-button").click();
+  await expect(guestPage.getByTestId("create-room-button")).toBeVisible({ timeout: 10_000 });
+  await expect(hostPage.locator("body")).toContainText("LeaveGuest left the room.");
+
+  await hostContext.close();
+  await guestContext.close();
 });

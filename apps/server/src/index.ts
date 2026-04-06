@@ -26,6 +26,7 @@ import type {
   SubmitAnswerRequest,
   SubmitAnswerResult,
   TransferHostRequest,
+  UpdateMatchSettingsRequest,
   UpdateSettingsRequest
 } from "@factorrush/shared";
 import { RoomStore } from "./roomStore.js";
@@ -72,6 +73,13 @@ io.on("connection", (socket) => {
     "room:update-settings",
     (payload: UpdateSettingsRequest, callback: (result: SocketAck<unknown>) => void) => {
       callback(roomStore.updateSettings(socket, payload));
+    }
+  );
+
+  socket.on(
+    "room:update-match-settings",
+    (payload: UpdateMatchSettingsRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.updateMatchSettings(socket, payload));
     }
   );
 
@@ -152,6 +160,13 @@ io.on("connection", (socket) => {
     "room:reset",
     (payload: RoomActionRequest, callback: (result: SocketAck<unknown>) => void) => {
       callback(roomStore.resetToLobby(socket, payload));
+    }
+  );
+
+  socket.on(
+    "room:leave",
+    (payload: RoomActionRequest, callback: (result: SocketAck<unknown>) => void) => {
+      callback(roomStore.leaveRoom(socket, payload));
     }
   );
 

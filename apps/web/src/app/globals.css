@@ -6,59 +6,110 @@
  * - 컬러 토큰과 공통 리셋 정의
  * - 앱 전체 배경과 기본 타이포 세팅
  */
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&display=swap");
 
 :root {
   color-scheme: light;
-  --bg: #eceae6;
-  --bg-2: #e3e0da;
-  --bg-start: #f4f1ec;
-  --bg-mid: #eceae6;
-  --bg-end: #e1ddd7;
-  --bg-glow-a: rgba(255, 255, 255, 0.7);
-  --bg-glow-b: rgba(220, 88, 70, 0.08);
-  --panel: rgba(239, 236, 231, 0.94);
-  --panel-strong: rgba(245, 243, 239, 0.98);
-  --surface-card: linear-gradient(180deg, #f5f2ee 0%, #ebe7e1 100%);
-  --surface-elevated: linear-gradient(180deg, #f2efeb 0%, #e8e4de 100%);
-  --surface-soft: linear-gradient(180deg, #f0ede8 0%, #e6e2dc 100%);
-  --surface-muted: linear-gradient(180deg, #efebe6 0%, #e2ddd6 100%);
-  --surface-chip: linear-gradient(180deg, #f5f2ee 0%, #e7e2db 100%);
-  --surface-input: linear-gradient(180deg, #ebe7e1 0%, #f4f1ec 100%);
-  --surface-accent: linear-gradient(180deg, #f0ece7 0%, #e5e0d9 100%);
-  --surface-warm: linear-gradient(180deg, #f3ebe8 0%, #e7ddd7 100%);
-  --surface-lock: linear-gradient(180deg, #ece8e2 0%, #dfdad3 100%);
-  --surface-answer: linear-gradient(180deg, #f1eee9 0%, #e6e1da 100%);
-  --overlay-scrim: rgba(92, 86, 79, 0.16);
-  --overlay-scrim-strong: rgba(49, 44, 40, 0.22);
-  --hero-watermark: rgba(101, 94, 86, 0.08);
-  --number-wall: rgba(76, 72, 67, 0.56);
-  --range-track: #d8d3cc;
-  --range-thumb-ring: rgba(214, 84, 64, 0.16);
-  --range-thumb-fill: linear-gradient(135deg, #fbf8f5, #e6e1da);
-  --line: rgba(66, 61, 57, 0.08);
-  --line-strong: rgba(103, 94, 85, 0.16);
-  --text: #272421;
-  --muted: #726b64;
-  --accent: #4c4945;
-  --accent-warm: #d65743;
-  --danger: #d65743;
+  --bg: #ececec;
+  --bg-2: #e5e5e5;
+  --bg-start: #f1f1f1;
+  --bg-mid: #ececec;
+  --bg-end: #e8e8e8;
+  --bg-glow-a: rgba(255, 255, 255, 0.48);
+  --bg-glow-b: rgba(255, 255, 255, 0.12);
+  --panel: rgba(244, 244, 244, 0.94);
+  --panel-strong: rgba(244, 244, 244, 0.985);
+  --surface-card: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-elevated: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-soft: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-muted: linear-gradient(180deg, #f1f1f1 0%, #ebebeb 100%);
+  --surface-chip: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-input: linear-gradient(180deg, #f3f3f3 0%, #eeeeee 100%);
+  --surface-accent: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-warm: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-lock: linear-gradient(180deg, #efefef 0%, #e8e8e8 100%);
+  --surface-answer: linear-gradient(180deg, #f4f4f4 0%, #efefef 100%);
+  --surface-grid: linear-gradient(180deg, #e6e6e6 0%, #dddddd 100%);
+  --overlay-scrim: rgba(34, 34, 34, 0.08);
+  --overlay-scrim-strong: rgba(34, 34, 34, 0.14);
+  --hero-watermark: rgba(94, 94, 94, 0.08);
+  --number-wall: rgba(94, 94, 94, 0.25);
+  --range-track: #dddddd;
+  --range-thumb-ring: rgba(255, 74, 0, 0.12);
+  --range-thumb-fill: #f4f4f4;
+  --range-thumb-border: #c8c8c8;
+  --range-thumb-shadow:
+    inset 1px 0 0 rgba(255, 255, 255, 0.46),
+    inset -1px 0 0 rgba(0, 0, 0, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 2px 4px rgba(0, 0, 0, 0.08);
+  --line: rgba(34, 34, 34, 0.1);
+  --line-strong: rgba(34, 34, 34, 0.16);
+  --text: #222222;
+  --muted: #5e5e5e;
+  --accent: #5e5e5e;
+  --accent-warm: #ff4a00;
+  --danger: #ff4a00;
   --positive: #228d5f;
-  --live-chip-text: #5a514a;
-  --live-chip-bg: rgba(248, 245, 240, 0.84);
-  --live-chip-border: rgba(85, 79, 72, 0.12);
-  --grid-line: rgba(86, 81, 76, 0.05);
-  --grid-opacity: 0.46;
+  --live-chip-text: #5e5e5e;
+  --live-chip-bg: rgba(244, 244, 244, 0.94);
+  --live-chip-border: rgba(34, 34, 34, 0.1);
+  --grid-line: rgba(94, 94, 94, 0.1);
+  --grid-line-alt: rgba(170, 170, 170, 0.08);
+  --grid-opacity: 0.76;
   --grid-mask: linear-gradient(to bottom, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0.2));
-  --shadow: 16px 16px 32px rgba(174, 168, 158, 0.45), -14px -14px 28px rgba(255, 255, 255, 0.9);
-  --shadow-strong: 24px 24px 54px rgba(166, 160, 150, 0.5), -18px -18px 34px rgba(255, 255, 255, 0.92);
-  --shadow-soft: 10px 10px 20px rgba(181, 174, 165, 0.28), -8px -8px 16px rgba(255, 255, 255, 0.72);
-  --shadow-inset: inset 7px 7px 14px rgba(202, 197, 189, 0.72), inset -6px -6px 12px rgba(255, 255, 255, 0.84);
-  --shadow-pressed: inset 10px 10px 20px rgba(199, 193, 184, 0.78), inset -8px -8px 16px rgba(255, 255, 255, 0.8);
-  --shadow-cta: 14px 14px 24px rgba(177, 72, 48, 0.22), -8px -8px 18px rgba(255, 255, 255, 0.18);
-  --shadow-modal: 22px 24px 42px rgba(171, 163, 152, 0.26), -4px -4px 10px rgba(255, 255, 255, 0.32);
-  --radius-panel: 1.35rem;
-  --radius-control: 1rem;
+  --prime-float: rgba(94, 94, 94, 0.22);
+  --prime-float-shadow: rgba(255, 255, 255, 0.26);
+  --prime-font: "Cormorant Garamond", "Times New Roman", serif;
+  --shadow:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.26),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.247),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.23),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.192),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.056);
+  --shadow-strong:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.3),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.284),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.264),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.222),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.082);
+  --shadow-soft:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.22),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.205),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.19),
+    4.90083px 4.90083px 7.24503px -3px rgba(0, 0, 0, 0.155),
+    8px 8px 16px -3.6px rgba(0, 0, 0, 0.048);
+  --shadow-inset: inset 4px 4px 8px rgba(0, 0, 0, 0.045), inset -4px -4px 8px rgba(255, 255, 255, 0.7);
+  --shadow-pressed: inset 6px 6px 10px rgba(0, 0, 0, 0.075), inset -5px -5px 10px rgba(255, 255, 255, 0.68);
+  --shadow-cta:
+    0 1px 1px rgba(116, 32, 0, 0.34),
+    0 6px 12px rgba(255, 74, 0, 0.24);
+  --shadow-modal:
+    0 2px 2px rgba(0, 0, 0, 0.3),
+    0 8px 16px rgba(0, 0, 0, 0.14);
+  --card-edge-highlight:
+    inset 1px 1px 1px 0 rgba(255, 255, 255, 1),
+    inset -1px -1px 1px 0 rgba(0, 0, 0, 0.15),
+    -0.5px -0.5px 0 0 rgba(0, 0, 0, 0.05);
+  --card-shadow-object:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.26),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.247),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.23),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.192),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.056);
+  --button-shadow-object:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    0 1px 1px rgba(0, 0, 0, 0.16),
+    0 4px 8px rgba(0, 0, 0, 0.18);
+  --button-shadow-cta-object:
+    inset 0 1px 0 rgba(255, 137, 92, 0.22),
+    0 1px 1px rgba(161, 55, 10, 0.3),
+    0 4px 8px rgba(255, 74, 0, 0.34);
+  --button-well-shadow:
+    inset 2px 2px 4px rgba(0, 0, 0, 0.04),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.7);
+  --radius-panel: 1.18rem;
+  --radius-control: 0.84rem;
   --radius-pill: 999px;
 }
 
@@ -83,13 +134,18 @@ html[data-theme="dark"] {
   --surface-warm: linear-gradient(180deg, #38312f 0%, #2a2524 100%);
   --surface-lock: linear-gradient(180deg, #2d2d2b 0%, #232321 100%);
   --surface-answer: linear-gradient(180deg, #33312f 0%, #272523 100%);
+  --surface-grid: linear-gradient(180deg, #2a2a28 0%, #21211f 100%);
   --overlay-scrim: rgba(8, 8, 8, 0.42);
   --overlay-scrim-strong: rgba(5, 5, 5, 0.54);
   --hero-watermark: rgba(255, 255, 255, 0.06);
   --number-wall: rgba(233, 230, 224, 0.46);
   --range-track: #1f1f1e;
   --range-thumb-ring: rgba(214, 87, 67, 0.14);
-  --range-thumb-fill: linear-gradient(135deg, #4b4b49, #2f2f2d);
+  --range-thumb-fill: #6a6a68;
+  --range-thumb-border: #7a7a78;
+  --range-thumb-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.26),
+    0 3px 6px rgba(0, 0, 0, 0.14);
   --line: rgba(255, 255, 255, 0.04);
   --line-strong: rgba(255, 255, 255, 0.08);
   --text: #f3eee8;
@@ -101,16 +157,55 @@ html[data-theme="dark"] {
   --live-chip-text: #f1ece5;
   --live-chip-bg: rgba(58, 58, 56, 0.82);
   --live-chip-border: rgba(255, 255, 255, 0.08);
-  --grid-line: rgba(255, 255, 255, 0.05);
-  --grid-opacity: 0.28;
+  --grid-line: rgba(255, 255, 255, 0.09);
+  --grid-line-alt: rgba(232, 122, 103, 0.07);
+  --grid-opacity: 0.42;
   --grid-mask: linear-gradient(to bottom, rgba(0, 0, 0, 0.84), rgba(0, 0, 0, 0.22));
-  --shadow: 16px 16px 32px rgba(11, 11, 11, 0.48), -10px -10px 20px rgba(255, 255, 255, 0.03);
-  --shadow-strong: 24px 24px 46px rgba(7, 7, 7, 0.58), -14px -14px 28px rgba(255, 255, 255, 0.04);
-  --shadow-soft: 10px 10px 22px rgba(11, 11, 11, 0.36), -6px -6px 14px rgba(255, 255, 255, 0.025);
+  --prime-float: rgba(238, 231, 222, 0.24);
+  --prime-float-shadow: rgba(0, 0, 0, 0.12);
+  --shadow:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.56),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.54),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.5),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.42),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.18);
+  --shadow-strong:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.64),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.6),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.56),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.48),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.24);
+  --shadow-soft:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.48),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.46),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.42),
+    4.90083px 4.90083px 7.24503px -3px rgba(0, 0, 0, 0.34),
+    8px 8px 16px -3.6px rgba(0, 0, 0, 0.14);
   --shadow-inset: inset 8px 8px 16px rgba(14, 14, 14, 0.66), inset -7px -7px 14px rgba(255, 255, 255, 0.03);
   --shadow-pressed: inset 10px 10px 18px rgba(12, 12, 12, 0.72), inset -8px -8px 14px rgba(255, 255, 255, 0.02);
-  --shadow-cta: 14px 14px 28px rgba(140, 56, 39, 0.3), -6px -6px 14px rgba(255, 255, 255, 0.025);
-  --shadow-modal: 20px 24px 40px rgba(6, 6, 6, 0.52), -6px -6px 12px rgba(255, 255, 255, 0.02);
+  --shadow-cta: 6px 6px 10px rgba(140, 56, 39, 0.46), -3px -3px 6px rgba(255, 255, 255, 0.012);
+  --shadow-modal: 8px 8px 14px rgba(4, 4, 4, 0.7), -3px -3px 5px rgba(255, 255, 255, 0.012);
+  --card-edge-highlight:
+    inset 1px 1px 1px 0 rgba(255, 255, 255, 0.06),
+    inset -1px -1px 1px 0 rgba(0, 0, 0, 0.55),
+    -0.5px -0.5px 0 0 rgba(255, 255, 255, 0.02);
+  --card-shadow-object:
+    0.444584px 0.444584px 0.628737px -1px rgba(0, 0, 0, 0.56),
+    1.21072px 1.21072px 1.71222px -1.5px rgba(0, 0, 0, 0.54),
+    2.6583px 2.6583px 3.75941px -2.25px rgba(0, 0, 0, 0.5),
+    5.90083px 5.90083px 8.34503px -3px rgba(0, 0, 0, 0.42),
+    10px 10px 21.2132px -3.75px rgba(0, 0, 0, 0.18);
+  --button-shadow-object:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.32),
+    0 4px 8px rgba(0, 0, 0, 0.5);
+  --button-shadow-cta-object:
+    inset 0 1px 0 rgba(255, 255, 255, 0.02),
+    0 1px 2px rgba(0, 0, 0, 0.34),
+    0 4px 7px rgba(140, 56, 39, 0.32);
+  --button-well-shadow:
+    inset 3px 3px 6px rgba(0, 0, 0, 0.28),
+    inset -2px -2px 4px rgba(255, 255, 255, 0.02);
 }
 
 * {
