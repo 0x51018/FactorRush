@@ -683,7 +683,7 @@ test("host can kick another player from the lobby", async ({ browser }) => {
   await expect(guestPage.getByTestId("leave-room-button")).toBeVisible();
 
   const guestPod = hostPage.getByTestId("player-pod").filter({ hasText: "KickGuest" });
-  await guestPod.getByRole("button", { name: "Kick" }).click();
+  await guestPod.getByTestId("kick-player-button").click();
 
   await expect(guestPage.getByTestId("invite-name-input")).toBeVisible({ timeout: 10_000 });
   await expect(hostPage.locator("body")).toContainText("KickGuest was removed from the room.");

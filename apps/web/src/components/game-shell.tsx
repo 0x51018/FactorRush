@@ -169,13 +169,8 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     };
     const kickedListener = ({ roomId }: { roomId: string }) => {
       clearRoomSession(roomId);
-      latestSharedRoomState = null;
-      setRoom(null);
-      setPlayerId(null);
-      setMemberRole(null);
-      setAnswerDraft("");
+      resetLocalRoomState(roomId);
       setBusyState(null);
-      setRoomCode(roomId);
       setFeedback(
         locale === "ko" ? "방장에 의해 방에서 추방되었습니다." : "The host removed you from the room."
       );
@@ -2154,6 +2149,7 @@ function RoomExperience({
                               locale === "ko" ? `${candidate.name} 추방` : `Kick ${candidate.name}`
                             }
                             className={styles.miniAction}
+                            data-testid="kick-player-button"
                             data-tone="danger"
                             disabled={busyState === "kick"}
                             onClick={() => onKickPlayer(candidate.id)}
