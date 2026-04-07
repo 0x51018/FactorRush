@@ -198,7 +198,7 @@ test("invite flow, ready gate, factor options, and final results all work togeth
   await expect(hostPage.locator("body")).toContainText("1/1 ready");
   await hostPage.getByTestId("settings-button").click();
   await setRangeValue(hostPage.getByTestId("time-limit-range"), 35);
-  await expect(hostPage.locator("body")).toContainText("Updated rules applied.");
+  await expect(hostPage.locator("body")).toContainText("35s");
   await expect(hostPage.locator("body")).toContainText("0/1 ready");
   await hostPage.getByRole("button", { name: "Close" }).click();
 
