@@ -21,6 +21,7 @@ import {
   type CSSProperties,
   type Dispatch,
   type FormEvent,
+  type ReactNode,
   type RefObject,
   type SetStateAction
 } from "react";
@@ -82,6 +83,29 @@ type BusyState =
   | "reset"
   | null;
 
+type DensityMode = "normal" | "compact" | "tight";
+type RailMode = "inline" | "peek";
+type LobbyRulesMode = "inline" | "modal";
+type RoundRosterMode = "full" | "compact";
+type RailPanelId = "invite" | "rules" | "chat" | "players";
+type ScrollMode = "fit" | "scroll";
+
+type ResponsiveRoomLayoutState = {
+  density: DensityMode;
+  railMode: RailMode;
+  lobbyRulesMode: LobbyRulesMode;
+  roundRosterMode: RoundRosterMode;
+  isMobileViewport: boolean;
+};
+
+const DEFAULT_RESPONSIVE_ROOM_LAYOUT_STATE: ResponsiveRoomLayoutState = {
+  density: "normal",
+  railMode: "inline",
+  lobbyRulesMode: "inline",
+  roundRosterMode: "full",
+  isMobileViewport: false
+};
+
 type ThemeMode = "light" | "dark";
 const DISPLAY_NAME_KEY = "factorrush:last-name";
 const ROOM_SESSION_PREFIX = "factorrush:room:";
@@ -97,6 +121,7 @@ interface GameShellProps {
 
 export function GameShell({ initialRoomId }: GameShellProps) {
   const router = useRouter();
+  const pageRef = useRef<HTMLElement | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [memberRole, setMemberRole] = useState<RoomRole | null>(null);
@@ -112,6 +137,7 @@ export function GameShell({ initialRoomId }: GameShellProps) {
   const [now, setNow] = useState(0);
   const [locale, setLocale] = useState<Locale>("ko");
   const [theme, setTheme] = useState<ThemeMode>("light");
+  const [pageScrollMode, setPageScrollMode] = useState<ScrollMode>("fit");
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const attemptedReconnectRef = useRef<string | null>(null);
@@ -971,8 +997,45 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     }
   };
 
+  useEffect(() => {
+    const syncPageScrollMode = () => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      const viewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth);
+      const viewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
+      const viewportScale = window.visualViewport?.scale ?? 1;
+      const horizontalOverflow =
+        (pageRef.current?.scrollWidth ?? 0) - (pageRef.current?.clientWidth ?? viewportWidth) > 8;
+      const verticalOverflow =
+        (pageRef.current?.scrollHeight ?? 0) - (pageRef.current?.clientHeight ?? viewportHeight) > 8;
+
+      setPageScrollMode(
+        getPageScrollMode(
+          room?.phase ?? "landing",
+          viewportWidth,
+          viewportHeight,
+          viewportScale,
+          horizontalOverflow,
+          verticalOverflow
+        )
+      );
+    };
+
+    const frameId = window.requestAnimationFrame(syncPageScrollMode);
+    window.addEventListener("resize", syncPageScrollMode);
+    window.visualViewport?.addEventListener("resize", syncPageScrollMode);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", syncPageScrollMode);
+      window.visualViewport?.removeEventListener("resize", syncPageScrollMode);
+    };
+  }, [room?.phase]);
+
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-scroll-mode={pageScrollMode}>
       <div className={styles.noise} />
       <div className={styles.primeFloatField} aria-hidden="true">
         {FLOATING_PRIME_DECORATIONS.map((prime) => (
@@ -996,81 +1059,89 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       <div className={styles.signalTop} />
       <div className={styles.signalBottom} />
 
-      <main className={styles.page}>
+      <main
+        className={styles.page}
+        data-screen={room ? "room" : "landing"}
+        data-scroll-mode={pageScrollMode}
+        ref={pageRef}
+      >
         <header className={styles.masthead}>
-          <div>
+          <div className={styles.brandBlock}>
             <p className={styles.kicker}>{copy.mastheadKicker}</p>
-            <div className={styles.wordmarkRow}>
-              <h1 className={styles.wordmark}>FactorRush</h1>
-              <span
-                className={styles.connectionBadge}
-                data-live={isConnected}
-                data-testid="connection-badge"
-              >
-                {isConnected ? copy.connectionLive : copy.connectionReconnecting}
-              </span>
+            <div className={styles.brandRow}>
+              <div className={styles.wordmarkRow}>
+                <h1 className={styles.wordmark}>FactorRush</h1>
+                <span
+                  className={styles.connectionBadge}
+                  data-live={isConnected}
+                  data-testid="connection-badge"
+                >
+                  {isConnected ? copy.connectionLive : copy.connectionReconnecting}
+                </span>
+              </div>
+
+              <div className={`${styles.switchRow} ${styles.mastheadSwitchRow}`}>
+                <div className={styles.languageSwitch} aria-label={copy.languageLabel}>
+                  <button
+                    className={styles.languageButton}
+                    data-active={locale === "ko"}
+                    onClick={() => setLocale("ko")}
+                    type="button"
+                  >
+                    KO
+                  </button>
+                  <button
+                    className={styles.languageButton}
+                    data-active={locale === "en"}
+                    onClick={() => setLocale("en")}
+                    type="button"
+                  >
+                    EN
+                  </button>
+                </div>
+
+                <div className={styles.languageSwitch} aria-label={copy.themeLabel}>
+                  <button
+                    className={styles.languageButton}
+                    aria-label={copy.themeLight}
+                    data-active={theme === "light"}
+                    data-icon="true"
+                    onClick={() => setTheme("light")}
+                    title={copy.themeLight}
+                    type="button"
+                  >
+                    <ThemeModeIcon mode="light" />
+                  </button>
+                  <button
+                    className={styles.languageButton}
+                    aria-label={copy.themeDark}
+                    data-active={theme === "dark"}
+                    data-icon="true"
+                    onClick={() => setTheme("dark")}
+                    title={copy.themeDark}
+                    type="button"
+                  >
+                    <ThemeModeIcon mode="dark" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div className={styles.headerTools}>
-            <div className={styles.switchRow}>
-              <div className={styles.languageSwitch} aria-label={copy.languageLabel}>
-                <button
-                  className={styles.languageButton}
-                  data-active={locale === "ko"}
-                  onClick={() => setLocale("ko")}
-                  type="button"
-                >
-                  KO
-                </button>
-                <button
-                  className={styles.languageButton}
-                  data-active={locale === "en"}
-                  onClick={() => setLocale("en")}
-                  type="button"
-                >
-                  EN
-                </button>
-              </div>
-
-              <div className={styles.languageSwitch} aria-label={copy.themeLabel}>
-                <button
-                  className={styles.languageButton}
-                  aria-label={copy.themeLight}
-                  data-active={theme === "light"}
-                  data-icon="true"
-                  onClick={() => setTheme("light")}
-                  title={copy.themeLight}
-                  type="button"
-                >
-                  <ThemeModeIcon mode="light" />
-                </button>
-                <button
-                  className={styles.languageButton}
-                  aria-label={copy.themeDark}
-                  data-active={theme === "dark"}
-                  data-icon="true"
-                  onClick={() => setTheme("dark")}
-                  title={copy.themeDark}
-                  type="button"
-                >
-                  <ThemeModeIcon mode="dark" />
-                </button>
-              </div>
-            </div>
-
-            {showAmbientInfo ? (
+          {showAmbientInfo ? (
+            <div className={styles.headerTools}>
               <div className={styles.connectionInfo}>
                 <span>{copy.stackSummary}</span>
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </header>
 
         {room ? (
           <RoomExperience
             room={room}
             locale={locale}
+            pageScrollMode={pageScrollMode}
             playerId={playerId}
             memberRole={memberRole}
             isHost={isHost}
@@ -1447,6 +1518,7 @@ function LandingExperience({
 interface RoomExperienceProps {
   room: RoomSnapshot;
   locale: Locale;
+  pageScrollMode: ScrollMode;
   playerId: string | null;
   memberRole: RoomRole | null;
   isHost: boolean;
@@ -1484,6 +1556,7 @@ interface RoomExperienceProps {
 function RoomExperience({
   room,
   locale,
+  pageScrollMode,
   playerId,
   memberRole,
   isHost,
@@ -1527,7 +1600,13 @@ function RoomExperience({
   const [isSendingChat, setIsSendingChat] = useState(false);
   const [isRenamingRoom, setIsRenamingRoom] = useState(false);
   const [isRenamingPlayer, setIsRenamingPlayer] = useState(false);
-  const [isCompactLiveRail, setIsCompactLiveRail] = useState(false);
+  const [responsiveLayout, setResponsiveLayout] = useState<ResponsiveRoomLayoutState>(
+    DEFAULT_RESPONSIVE_ROOM_LAYOUT_STATE
+  );
+  const [activeRailPanel, setActiveRailPanel] = useState<RailPanelId | null>(null);
+  const [renderedRailPanel, setRenderedRailPanel] = useState<RailPanelId | null>(null);
+  const [isRailDrawerVisible, setIsRailDrawerVisible] = useState(false);
+  const [roomLayoutViewportTop, setRoomLayoutViewportTop] = useState(0);
   const [roomNameDraft, setRoomNameDraft] = useState(room.roomName);
   const [playerNameDraft, setPlayerNameDraft] = useState(
     room.players.find((candidate) => candidate.id === playerId)?.name ??
@@ -1540,6 +1619,7 @@ function RoomExperience({
   const chatListRef = useRef<HTMLDivElement | null>(null);
   const lobbyChatListRef = useRef<HTMLDivElement | null>(null);
   const playerNameInputRef = useRef<HTMLInputElement | null>(null);
+  const roomLayoutRef = useRef<HTMLElement | null>(null);
   const playerNameComposingRef = useRef(false);
   const commitPlayerNameDraft = (value: string) => {
     setPlayerNameDraft(sanitizePlayerName(value));
@@ -1582,12 +1662,21 @@ function RoomExperience({
   const connectedSpectators = room.spectators.filter((candidate) => candidate.connected);
   const spectatorCount = room.spectators.length;
   const canSeatMorePlayers = room.players.length < room.matchSettings.maxPlayers;
+  const isCrowdedLobbyRoster = room.phase === "lobby" && room.players.length >= 5;
+  const { density, railMode, lobbyRulesMode, roundRosterMode, isMobileViewport } = responsiveLayout;
   const liveBoardLabel = locale === "ko" ? "점수 현황" : "Live standings";
   const liveBoardTitle = locale === "ko" ? "리더 보드" : "Leaderboard";
   const lobbyRosterLabel = locale === "ko" ? "로비 공간" : "Lobby space";
   const lobbyRosterTitle = locale === "ko" ? "메인 로비 공간" : "Main Lobby Space";
+  const visibleLobbySlotCount =
+    room.phase === "lobby" && isMobileViewport
+      ? Math.min(
+          room.matchSettings.maxPlayers,
+          Math.max(4, room.players.length + (canSeatMorePlayers ? 1 : 0))
+        )
+      : room.matchSettings.maxPlayers;
   const rosterSlots = Array.from(
-    { length: room.matchSettings.maxPlayers },
+    { length: visibleLobbySlotCount },
     (_, index) => room.players[index] ?? null
   );
   const readyCount = connectedGuests.filter((candidate) => candidate.isReady).length;
@@ -1602,7 +1691,7 @@ function RoomExperience({
       : room.matchStartedAt
         ? Math.max(0, now - room.matchStartedAt)
         : 0;
-  const rulesSummary = getRuleLines(locale, room.settings);
+  const rulesSummary = getRuleSummary(locale, room.settings);
   const overlayActive = room.phase === "round-ended" || room.phase === "finished";
   const answerLabelHint =
     room.settings.mode === "factor"
@@ -1696,6 +1785,126 @@ function RoomExperience({
   const correctPlayers = roundDeltaRows.filter((entry) => entry.isCorrect);
   const revealSummary = getRevealSummary(locale, room, correctPlayers);
   const revealDeltaRange = getRevealDeltaRange(locale, roundDeltaRows);
+  const currentPlayerRank =
+    currentPlayer != null ? sortedPlayers.findIndex((candidate) => candidate.id === currentPlayer.id) + 1 : null;
+  const leadingPlayer = sortedPlayers[0] ?? null;
+  const leadingPlayerStatus =
+    leadingPlayer != null
+      ? room.round?.playerStatuses.find((entry) => entry.playerId === leadingPlayer.id) ?? null
+      : null;
+  const isBlockingPanelOpen =
+    isSettingsOpen || isMatchSettingsOpen || isRulesOpen || isScoreGuideOpen || overlayActive;
+  const effectiveRailMode: RailMode =
+    pageScrollMode === "scroll" ? "inline" : railMode;
+  const showInlineRail = room.phase === "finished" || effectiveRailMode === "inline";
+  const peekRailAvailable =
+    room.phase !== "finished" && effectiveRailMode === "peek" && !isBlockingPanelOpen;
+  const showPeekRail = peekRailAvailable && activeRailPanel == null;
+  const showCompactLiveRoster =
+    room.phase === "round-active" &&
+    effectiveRailMode === "inline" &&
+    roundRosterMode === "compact";
+  const canUseRailDrawer =
+    peekRailAvailable || (room.phase === "round-active" && roundRosterMode === "compact");
+  const isScrollRoom = pageScrollMode === "scroll";
+  const roomLayoutStyle = {
+    "--peek-rail-dock-top": `${roomLayoutViewportTop}px`,
+    "--room-ui-scale": density === "tight" ? "0.86" : density === "compact" ? "0.92" : "1",
+    "--room-type-scale": density === "tight" ? "0.96" : density === "compact" ? "0.995" : "1",
+    "--layout-gap": isScrollRoom
+      ? density === "tight"
+        ? "0.58rem"
+        : density === "compact"
+          ? "0.68rem"
+          : "0.84rem"
+      : density === "tight"
+        ? "0.72rem"
+        : density === "compact"
+          ? "0.82rem"
+          : "1rem",
+    "--room-rail-width": density === "tight" ? "252px" : density === "compact" ? "286px" : room.phase === "finished" ? "312px" : "332px",
+    "--control-band-padding": density === "tight" ? "0.78rem" : density === "compact" ? "0.88rem" : "1rem",
+    "--broadcast-padding": density === "tight" ? "0.58rem 0.72rem" : density === "compact" ? "0.62rem 0.78rem" : "0.66rem 0.84rem",
+    "--stage-surface-padding": density === "tight" ? "0.72rem 0.8rem" : density === "compact" ? "0.82rem 0.9rem" : "0.9rem 1rem",
+    "--stage-surface-active-padding": density === "tight" ? "0.48rem" : density === "compact" ? "0.52rem" : "0.55rem",
+    "--panel-padding": density === "tight" ? "0.72rem" : density === "compact" ? "0.8rem" : "0.92rem",
+    "--roster-padding": isCrowdedLobbyRoster
+      ? density === "tight"
+        ? "0.58rem"
+        : density === "compact"
+          ? "0.72rem"
+          : "0.92rem"
+      : density === "tight"
+        ? "0.68rem"
+        : density === "compact"
+          ? "0.82rem"
+          : "1rem",
+    "--roster-gap": isCrowdedLobbyRoster
+      ? density === "tight"
+        ? "0.48rem"
+        : density === "compact"
+          ? "0.62rem"
+          : "0.82rem"
+      : density === "tight"
+        ? "0.62rem"
+        : density === "compact"
+          ? "0.76rem"
+          : "0.92rem",
+    "--roster-card-min":
+      room.phase === "lobby" && isScrollRoom
+        ? density === "tight"
+          ? "9.25rem"
+          : density === "compact"
+            ? "10.75rem"
+            : "12.6rem"
+        : density === "tight"
+          ? "10.4rem"
+          : density === "compact"
+            ? "12.1rem"
+            : "14.75rem",
+    "--roster-row-min": isCrowdedLobbyRoster
+      ? room.phase === "lobby" && isScrollRoom
+        ? density === "tight"
+          ? "7.25rem"
+          : density === "compact"
+            ? "8rem"
+            : "8.8rem"
+        : density === "tight"
+          ? "7.95rem"
+          : density === "compact"
+            ? "8.7rem"
+            : "9.5rem"
+      : density === "tight"
+        ? room.phase === "lobby" && isScrollRoom
+          ? "7.7rem"
+          : "8.6rem"
+        : density === "compact"
+          ? room.phase === "lobby" && isScrollRoom
+            ? "8.6rem"
+            : "9.25rem"
+          : "10rem",
+    "--player-pod-padding": isCrowdedLobbyRoster
+      ? room.phase === "lobby" && isScrollRoom
+        ? density === "tight"
+          ? "0.54rem"
+          : density === "compact"
+            ? "0.66rem"
+            : "0.82rem"
+        : density === "tight"
+          ? "0.62rem"
+          : density === "compact"
+            ? "0.74rem"
+            : "0.92rem"
+      : density === "tight"
+        ? room.phase === "lobby" && isScrollRoom
+          ? "0.62rem"
+          : "0.72rem"
+        : density === "compact"
+          ? room.phase === "lobby" && isScrollRoom
+            ? "0.74rem"
+            : "0.82rem"
+          : "0.92rem"
+  } as CSSProperties;
 
   useEffect(() => {
     if (room.phase !== "lobby") {
@@ -1732,31 +1941,133 @@ function RoomExperience({
   }, [currentMember?.name]);
 
   useEffect(() => {
-    const syncCompactRail = () => {
+    const syncResponsiveLayout = () => {
       if (typeof window === "undefined") {
         return;
       }
 
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const viewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth);
+      const viewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
       const viewportScale = window.visualViewport?.scale ?? 1;
-      const shouldCompact =
-        room.phase === "round-active" &&
-        sortedPlayers.length >= 6 &&
-        (viewportWidth < 1360 || viewportHeight < 860 || viewportScale > 1.05);
 
-      setIsCompactLiveRail(shouldCompact);
+      setResponsiveLayout(
+        getResponsiveRoomLayoutState({
+          phase: room.phase,
+          playerCount: sortedPlayers.length,
+          viewportWidth,
+          viewportHeight,
+          viewportScale
+        })
+      );
     };
 
-    syncCompactRail();
-    window.addEventListener("resize", syncCompactRail);
-    window.visualViewport?.addEventListener("resize", syncCompactRail);
+    syncResponsiveLayout();
+    window.addEventListener("resize", syncResponsiveLayout);
+    window.visualViewport?.addEventListener("resize", syncResponsiveLayout);
 
     return () => {
-      window.removeEventListener("resize", syncCompactRail);
-      window.visualViewport?.removeEventListener("resize", syncCompactRail);
+      window.removeEventListener("resize", syncResponsiveLayout);
+      window.visualViewport?.removeEventListener("resize", syncResponsiveLayout);
     };
   }, [room.phase, sortedPlayers.length]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const updateRoomLayoutViewportTop = () => {
+      const nextTop = Math.max(0, roomLayoutRef.current?.getBoundingClientRect().top ?? 0);
+      setRoomLayoutViewportTop((previous) =>
+        Math.abs(previous - nextTop) < 0.5 ? previous : nextTop
+      );
+    };
+
+    const frameId = window.requestAnimationFrame(updateRoomLayoutViewportTop);
+    window.addEventListener("resize", updateRoomLayoutViewportTop);
+    window.visualViewport?.addEventListener("resize", updateRoomLayoutViewportTop);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", updateRoomLayoutViewportTop);
+      window.visualViewport?.removeEventListener("resize", updateRoomLayoutViewportTop);
+    };
+  }, [density, effectiveRailMode, locale, lobbyRulesMode, room.phase, roundRosterMode]);
+
+  useEffect(() => {
+    if (!activeRailPanel) {
+      return;
+    }
+
+    const availablePanelIds =
+      room.phase === "lobby"
+        ? new Set<RailPanelId>(["invite", "rules", "chat"])
+        : room.phase === "finished"
+          ? new Set<RailPanelId>()
+          : new Set<RailPanelId>(["players", "chat"]);
+    const canKeepPlayersDrawer =
+      room.phase === "round-active" && roundRosterMode === "compact" && activeRailPanel === "players";
+
+    if (
+      !availablePanelIds.has(activeRailPanel) ||
+      (effectiveRailMode === "inline" && !canKeepPlayersDrawer)
+    ) {
+      setActiveRailPanel(null);
+    }
+  }, [activeRailPanel, effectiveRailMode, room.phase, roundRosterMode]);
+
+  useEffect(() => {
+    if (isSettingsOpen || isMatchSettingsOpen || isRulesOpen || isScoreGuideOpen) {
+      setActiveRailPanel(null);
+    }
+  }, [isMatchSettingsOpen, isRulesOpen, isScoreGuideOpen, isSettingsOpen]);
+
+  useEffect(() => {
+    let frameOneId = 0;
+    let frameTwoId = 0;
+    let timeoutId = 0;
+
+    if (!canUseRailDrawer) {
+      setIsRailDrawerVisible(false);
+      setRenderedRailPanel(null);
+      return;
+    }
+
+    if (activeRailPanel) {
+      if (renderedRailPanel !== activeRailPanel) {
+        setRenderedRailPanel(activeRailPanel);
+      }
+
+      if (renderedRailPanel === activeRailPanel && isRailDrawerVisible) {
+        return;
+      }
+
+      setIsRailDrawerVisible(false);
+      frameOneId = window.requestAnimationFrame(() => {
+        frameTwoId = window.requestAnimationFrame(() => {
+          setIsRailDrawerVisible(true);
+        });
+      });
+
+      return () => {
+        window.cancelAnimationFrame(frameOneId);
+        window.cancelAnimationFrame(frameTwoId);
+      };
+    }
+
+    if (renderedRailPanel) {
+      setIsRailDrawerVisible(false);
+      timeoutId = window.setTimeout(() => {
+        setRenderedRailPanel(null);
+      }, 420);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameOneId);
+      window.cancelAnimationFrame(frameTwoId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [activeRailPanel, canUseRailDrawer, isRailDrawerVisible, renderedRailPanel]);
 
   useEffect(() => {
     if (!isRenamingRoom) {
@@ -1807,6 +2118,11 @@ function RoomExperience({
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (activeRailPanel) {
+          setActiveRailPanel(null);
+          return;
+        }
+
         setIsSettingsOpen(false);
         setIsRulesOpen(false);
         setIsScoreGuideOpen(false);
@@ -1841,7 +2157,7 @@ function RoomExperience({
     return () => {
       window.removeEventListener("keydown", handleEscape);
     };
-  }, []);
+  }, [activeRailPanel, room.phase]);
 
   const handleChatSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1887,8 +2203,449 @@ function RoomExperience({
     }
   };
 
+  const rulesShortcutLabel = locale === "ko" ? "규칙 보기" : "Open rules";
+  const playersShortcutLabel = locale === "ko" ? "참가자 보기" : "Open players";
+  const closeRailDrawer = () => {
+    setActiveRailPanel(null);
+  };
+  const toggleRailPanel = (panelId: RailPanelId) => {
+    setActiveRailPanel((current) => (current === panelId ? null : panelId));
+  };
+  const renderRailPanelHeader = ({
+    label,
+    title,
+    inDrawer = false,
+    actions
+  }: {
+    label: string;
+    title: string;
+    inDrawer?: boolean;
+    actions?: ReactNode;
+  }) => {
+    const hasHeaderActions = actions != null || inDrawer;
+    const headerActions = hasHeaderActions ? (
+      <div className={styles.drawerPanelActions}>
+        {actions}
+        {inDrawer ? (
+          <button
+            className={`${styles.secondaryAction} ${styles.modalCloseButton} ${styles.drawerPanelCloseButton}`}
+            onClick={closeRailDrawer}
+            type="button"
+          >
+            {copy.closePanel}
+          </button>
+        ) : null}
+      </div>
+    ) : null;
+
+    if (!headerActions) {
+      return (
+        <div className={styles.railHeading}>
+          <span>{label}</span>
+          <strong>{title}</strong>
+        </div>
+      );
+    }
+
+    return (
+      <div className={inDrawer ? styles.drawerPanelHeader : styles.railHeaderRow}>
+        <div className={styles.railHeading}>
+          <span>{label}</span>
+          <strong>{title}</strong>
+        </div>
+        {headerActions}
+      </div>
+    );
+  };
+  const openRulesModal = () => {
+    closeRailDrawer();
+    setIsRulesOpen(true);
+  };
+  const openScoreGuideModal = () => {
+    closeRailDrawer();
+    setIsScoreGuideOpen(true);
+  };
+  const inviteInDrawer = renderedRailPanel === "invite";
+  const rulesInDrawer = renderedRailPanel === "rules";
+  const chatInDrawer = renderedRailPanel === "chat";
+  const playersInDrawer = renderedRailPanel === "players";
+  const activeDrawerAnchorTop =
+    renderedRailPanel != null ? getRailPanelAnchorTop(renderedRailPanel, room.phase) : "1rem";
+  const showExpandedRulesPanel = lobbyRulesMode === "inline" || rulesInDrawer;
+
+  const lobbyInvitePanel = (
+    <section className={styles.railBlock}>
+      {renderRailPanelHeader({
+        label: copy.inviteLineLabel,
+        title: copy.shareUrlLabel,
+        inDrawer: inviteInDrawer
+      })}
+      <div className={styles.inviteCodeRow}>
+        <code className={styles.inviteCode} data-testid="invite-url">
+          {inviteUrl}
+        </code>
+        <button
+          aria-label={copy.copyLink}
+          className={styles.iconAction}
+          data-testid="copy-invite-button"
+          onClick={onCopyInvite}
+          title={copy.copyLink}
+          type="button"
+        >
+          <CopyLinkIcon />
+        </button>
+      </div>
+    </section>
+  );
+
+  const lobbyRulesPanel = (
+    <section className={styles.railBlock}>
+      {renderRailPanelHeader({
+        label: copy.lobbyRuleCardLabel,
+        title: copy.lobbyRuleCardTitle,
+        inDrawer: rulesInDrawer
+      })}
+      {showExpandedRulesPanel ? (
+        <>
+          <RuleSummaryList locale={locale} summary={rulesSummary} />
+          <div className={styles.railActionRow}>
+            <button
+              className={`${styles.secondaryAction} ${styles.railHeaderAction}`}
+              data-testid="score-guide-button"
+              onClick={openScoreGuideModal}
+              type="button"
+            >
+              {copy.scoreGuideOpen}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className={styles.compactRulesPrompt}>
+          <p className={styles.railBody}>
+            {locale === "ko"
+              ? "아래 버튼을 눌러 규칙 및 점수 공식을 확인하세요."
+              : "Use the buttons below to review the rules and scoring formulas."}
+          </p>
+          <div className={styles.railActionRow}>
+            <button
+              className={styles.secondaryAction}
+              onClick={openRulesModal}
+              type="button"
+            >
+              {rulesShortcutLabel}
+            </button>
+            <button
+              className={styles.secondaryAction}
+              data-testid="score-guide-button"
+              onClick={openScoreGuideModal}
+              type="button"
+            >
+              {copy.scoreGuideOpen}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+
+  const lobbyChatPanel = (
+    <section className={`${styles.railBlock} ${styles.lobbyChatBlock}`}>
+      {renderRailPanelHeader({
+        label: copy.feedLabel,
+        title: copy.lobbyChatTitle,
+        inDrawer: chatInDrawer
+      })}
+      <div className={styles.chatScrollWell} ref={lobbyChatListRef}>
+        <div
+          className={`${styles.chatList} ${styles.lobbyChatList}`}
+          data-testid="lobby-chat-list"
+        >
+          {visibleChatFeed.length === 0 ? (
+            <p className={styles.railBody}>{copy.noChatYet}</p>
+          ) : (
+            visibleChatFeed.map((entry) =>
+              entry.kind === "system" ? (
+                <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
+                  <span>{getSystemChatMessage(entry, locale)}</span>
+                </div>
+              ) : (
+                <div className={styles.lobbyChatLine} key={entry.id}>
+                  <strong>{entry.playerName}</strong>
+                  <span>{entry.text}</span>
+                </div>
+              )
+            )
+          )}
+        </div>
+      </div>
+      <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+        <input
+          ref={lobbyChatInputRef}
+          data-testid="chat-input"
+          maxLength={180}
+          onChange={(event) => setChatDraft(event.target.value)}
+          placeholder={copy.chatPlaceholder}
+          type="text"
+          value={chatDraft}
+        />
+        <button
+          className={styles.primaryAction}
+          data-testid="chat-send-button"
+          disabled={!chatDraft.trim() || isSendingChat}
+          type="submit"
+        >
+          {isSendingChat ? copy.sendingChat : copy.sendChat}
+        </button>
+      </form>
+    </section>
+  );
+
+  const livePlayersPanel = (
+    <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
+      {renderRailPanelHeader({
+        label: liveBoardLabel,
+        title: liveBoardTitle,
+        inDrawer: playersInDrawer
+      })}
+
+      <div className={styles.liveRailContent}>
+        <div className={styles.leaderboardSection}>
+          <div className={styles.leaderboard} data-testid="leaderboard">
+            {sortedPlayers.map((candidate, index) => {
+              const status = room.round?.playerStatuses.find((entry) => entry.playerId === candidate.id);
+              const state = getLeaderboardState(status);
+
+              return (
+                <div
+                  className={styles.leaderRow}
+                  data-me={candidate.id === playerId}
+                  data-state={state}
+                  key={candidate.id}
+                >
+                  <div className={styles.leaderRowMain}>
+                    <span>{String(index + 1).padStart(2, "0")}</span>
+                    <div>
+                      <h5>{candidate.name}</h5>
+                      <p>
+                        {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
+                        {getRoundBoardStatus(locale, status)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className={styles.leaderRowScore}>
+                    <strong>{candidate.score}</strong>
+                  </div>
+
+                  {room.phase === "round-active" &&
+                  status?.lastSubmissionKind &&
+                  !status.hasSubmitted &&
+                  status.lastSubmissionText ? (
+                    <div className={styles.leaderBubble} data-kind={status.lastSubmissionKind}>
+                      {status.lastSubmissionText}
+                    </div>
+                  ) : room.phase === "round-active" && recentChatByPlayer.get(candidate.id) ? (
+                    <div className={styles.leaderBubble} data-kind="chat">
+                      {recentChatByPlayer.get(candidate.id)?.text}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+
+        </div>
+      </div>
+
+      <div className={styles.railFoot}>
+        {spectatorCount > 0 ? (
+          <div className={styles.liveSpectatorBadge} data-testid="live-spectator-count-card">
+            <EyeIcon />
+            <strong>
+              {locale === "ko"
+                ? `관전자 ${spectatorCount}명`
+                : `${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"}`}
+            </strong>
+          </div>
+        ) : null}
+        <p className={styles.compactHint}>
+          {locale === "ko"
+            ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
+            : `${submittedCount}/${room.players.length} players are correct.`}
+        </p>
+      </div>
+    </section>
+  );
+
+  const livePlayersCompactPanel = (
+    <section className={`${styles.railBlock} ${styles.compactRosterPanel}`}>
+      <div className={styles.railHeaderRow}>
+        <div className={styles.railHeading}>
+          <span>{liveBoardLabel}</span>
+          <strong>{liveBoardTitle}</strong>
+        </div>
+        <button
+          className={`${styles.secondaryAction} ${styles.railHeaderAction}`}
+          onClick={() => setActiveRailPanel("players")}
+          type="button"
+        >
+          {playersShortcutLabel}
+        </button>
+      </div>
+
+      <div className={styles.compactRosterSummary}>
+        <article className={styles.compactRosterLeaderCard}>
+          <span className={styles.compactRosterLeaderRank}>
+            {leadingPlayer ? "#1" : locale === "ko" ? "대기" : "Idle"}
+          </span>
+          <div className={styles.compactRosterLeaderCopy}>
+            <small>{locale === "ko" ? "현재 선두" : "Current leader"}</small>
+            <strong>{leadingPlayer?.name ?? (locale === "ko" ? "아직 없음" : "No leader yet")}</strong>
+          </div>
+          <div className={styles.compactRosterLeaderScore}>
+            <small>{locale === "ko" ? "점수" : "Score"}</small>
+            <strong>{leadingPlayer ? leadingPlayer.score : "-"}</strong>
+          </div>
+        </article>
+
+        <div className={styles.compactRosterStatGrid}>
+          <div className={styles.compactRosterStat}>
+            <span>{locale === "ko" ? "내 순위" : "My rank"}</span>
+            <strong>
+              {currentPlayerRank != null ? `#${currentPlayerRank}` : locale === "ko" ? "관전 중" : "Watching"}
+            </strong>
+          </div>
+          <div className={styles.compactRosterStat}>
+            <span>{locale === "ko" ? "정답자" : "Correct"}</span>
+            <strong>
+              {submittedCount}/{room.players.length}
+            </strong>
+          </div>
+          {spectatorCount > 0 ? (
+            <div className={`${styles.compactRosterStat} ${styles.compactRosterStatWide}`}>
+              <span>{locale === "ko" ? "관전자" : "Spectators"}</span>
+              <strong>
+                {locale === "ko" ? `${spectatorCount}명 함께 관전 중` : `${spectatorCount} watching`}
+              </strong>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {leadingPlayer && leadingPlayerStatus ? (
+        <p className={styles.compactHint}>
+          {locale === "ko"
+            ? `${leadingPlayer.name}님이 시도 ${leadingPlayerStatus.attemptCount ?? 0}회로 선두입니다. 현재 상태: ${getRoundBoardStatus(locale, leadingPlayerStatus)}`
+            : `${leadingPlayer.name} leads with ${leadingPlayerStatus.attemptCount ?? 0} tries. Current state: ${getRoundBoardStatus(locale, leadingPlayerStatus)}`}
+        </p>
+      ) : null}
+    </section>
+  );
+
+  const liveChatPanel = (
+    <section
+      className={`${styles.railBlock} ${styles.lobbyChatBlock} ${styles.liveChatBlock}`}
+      data-testid="chat-panel"
+    >
+      {renderRailPanelHeader({
+        label: copy.feedLabel,
+        title: copy.feedTitle,
+        inDrawer: chatInDrawer
+      })}
+      <div className={styles.chatScrollWell} ref={chatListRef}>
+        <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list">
+          {visibleChatFeed.length === 0 ? (
+            <p className={styles.railBody}>{copy.noChatYet}</p>
+          ) : (
+            visibleChatFeed.map((entry) =>
+              entry.kind === "system" ? (
+                <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
+                  <span>{getSystemChatMessage(entry, locale)}</span>
+                </div>
+              ) : (
+                <div className={styles.chatLine} key={entry.id}>
+                  <strong>{entry.playerName}</strong>
+                  <span>{entry.text}</span>
+                </div>
+              )
+            )
+          )}
+        </div>
+      </div>
+
+      <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
+        <input
+          ref={chatInputRef}
+          data-testid="chat-input"
+          maxLength={180}
+          onChange={(event) => setChatDraft(event.target.value)}
+          placeholder={copy.chatPlaceholder}
+          type="text"
+          value={chatDraft}
+        />
+        <button
+          className={styles.primaryAction}
+          data-testid="chat-send-button"
+          disabled={!chatDraft.trim() || isSendingChat}
+          type="submit"
+        >
+          {isSendingChat ? copy.sendingChat : copy.sendChat}
+        </button>
+      </form>
+      <p className={styles.compactHint}>{copy.feedHint}</p>
+    </section>
+  );
+
+  const railPanels: Array<{ id: RailPanelId; tabLabel: string; content: ReactNode }> =
+    room.phase === "lobby"
+        ? [
+            {
+              id: "invite",
+            tabLabel: locale === "ko" ? "초대 링크 보기" : "Invite",
+              content: lobbyInvitePanel
+            },
+            {
+              id: "rules",
+            tabLabel: locale === "ko" ? "현재 룰 보기" : "Rules",
+              content: lobbyRulesPanel
+            },
+            {
+              id: "chat",
+            tabLabel: locale === "ko" ? "채팅창 보기" : "Chat",
+              content: lobbyChatPanel
+            }
+          ]
+      : room.phase === "finished"
+        ? []
+          : [
+              {
+                id: "players",
+              tabLabel: locale === "ko" ? "참가자 보기" : "Players",
+                content: livePlayersPanel
+              },
+              {
+                id: "chat",
+              tabLabel: locale === "ko" ? "채팅창 보기" : "Chat",
+                content: liveChatPanel
+              }
+            ];
+
+  const renderedRailDescriptor = railPanels.find((panel) => panel.id === renderedRailPanel) ?? null;
+  const showRailDrawer = renderedRailDescriptor != null && canUseRailDrawer;
+
   return (
-    <section className={styles.roomLayout} data-phase={room.phase} data-overlay-active={overlayActive}>
+    <section
+      className={styles.roomLayout}
+      data-density={density}
+      data-lobby-rules-mode={room.phase === "lobby" ? lobbyRulesMode : undefined}
+      data-overlay-active={overlayActive}
+      data-phase={room.phase}
+      data-crowded-lobby={isCrowdedLobbyRoster ? "true" : undefined}
+      data-rail-mode={effectiveRailMode}
+      data-scroll-mode={pageScrollMode}
+      data-round-roster-mode={room.phase === "round-active" ? roundRosterMode : undefined}
+      ref={roomLayoutRef}
+      style={roomLayoutStyle}
+    >
       <div className={styles.stageColumn}>
         <section className={styles.broadcastLine}>
           <div>
@@ -2261,7 +3018,10 @@ function RoomExperience({
 
               {room.phase === "round-active" ? (
                 isSpectator ? (
-                  <div className={styles.waitingPanel} data-testid="spectator-panel">
+                  <div
+                    className={`${styles.waitingPanel} ${styles.spectatorPanelCompact}`}
+                    data-testid="spectator-panel"
+                  >
                     <span className={styles.challengeLabel}>{copy.spectatorLabel}</span>
                     <strong>{copy.spectatorLiveTitle}</strong>
                     <p>{copy.spectatorLiveBody}</p>
@@ -2369,7 +3129,7 @@ function RoomExperience({
                       <button
                         className={styles.secondaryAction}
                         data-testid="answer-rules-button"
-                        onClick={() => setIsRulesOpen(true)}
+                        onClick={openRulesModal}
                         type="button"
                       >
                         {locale === "ko" ? "룰" : "Rules"}
@@ -2411,111 +3171,23 @@ function RoomExperience({
         </section>
       </div>
 
-      <aside
-        className={`${styles.sideRail} ${
-          room.phase === "lobby"
-            ? styles.sideRailLobby
-            : room.phase === "finished"
-              ? styles.sideRailResults
-              : styles.sideRailLive
-        } ${isCompactLiveRail ? styles.sideRailLiveCompact : ""}`}
-      >
-        {room.phase === "lobby" ? (
-          <>
-            <section className={styles.railBlock}>
-              <div className={styles.railHeading}>
-                <span>{copy.inviteLineLabel}</span>
-                <strong>{copy.shareUrlLabel}</strong>
-              </div>
-              <div className={styles.inviteCodeRow}>
-                <code className={styles.inviteCode} data-testid="invite-url">
-                  {inviteUrl}
-                </code>
-                <button
-                  aria-label={copy.copyLink}
-                  className={styles.iconAction}
-                  data-testid="copy-invite-button"
-                  onClick={onCopyInvite}
-                  title={copy.copyLink}
-                  type="button"
-                >
-                  <CopyLinkIcon />
-                </button>
-              </div>
-            </section>
-
-            <section className={styles.railBlock}>
-              <div className={styles.railHeading}>
-                <span>{copy.lobbyRuleCardLabel}</span>
-                <strong>{copy.lobbyRuleCardTitle}</strong>
-              </div>
-              <ul className={styles.noteList}>
-                {rulesSummary.map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-              <div className={styles.railActionRow}>
-                <button
-                  className={styles.secondaryAction}
-                  data-testid="score-guide-button"
-                  onClick={() => setIsScoreGuideOpen(true)}
-                  type="button"
-                >
-                  {copy.scoreGuideOpen}
-                </button>
-              </div>
-            </section>
-
-            <section className={`${styles.railBlock} ${styles.lobbyChatBlock}`}>
-              <div className={styles.railHeading}>
-                <span>{copy.feedLabel}</span>
-                <strong>{copy.lobbyChatTitle}</strong>
-              </div>
-              <div className={styles.chatScrollWell} ref={lobbyChatListRef}>
-                <div
-                  className={`${styles.chatList} ${styles.lobbyChatList}`}
-                  data-testid="lobby-chat-list"
-                >
-                  {visibleChatFeed.length === 0 ? (
-                    <p className={styles.railBody}>{copy.noChatYet}</p>
-                  ) : (
-                    visibleChatFeed.map((entry) =>
-                      entry.kind === "system" ? (
-                        <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
-                          <span>{getSystemChatMessage(entry, locale)}</span>
-                        </div>
-                      ) : (
-                        <div className={styles.lobbyChatLine} key={entry.id}>
-                          <strong>{entry.playerName}</strong>
-                          <span>{entry.text}</span>
-                        </div>
-                      )
-                    )
-                  )}
-                </div>
-              </div>
-              <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
-                <input
-                  ref={lobbyChatInputRef}
-                  data-testid="chat-input"
-                  maxLength={180}
-                  onChange={(event) => setChatDraft(event.target.value)}
-                  placeholder={copy.chatPlaceholder}
-                  type="text"
-                  value={chatDraft}
-                />
-                <button
-                  className={styles.primaryAction}
-                  data-testid="chat-send-button"
-                  disabled={!chatDraft.trim() || isSendingChat}
-                  type="submit"
-                >
-                  {isSendingChat ? copy.sendingChat : copy.sendChat}
-                </button>
-              </form>
-            </section>
-          </>
-        ) : room.phase === "finished" ? (
+      {showInlineRail ? (
+        <aside
+          className={`${styles.sideRail} ${
+            room.phase === "lobby"
+              ? styles.sideRailLobby
+              : room.phase === "finished"
+                ? styles.sideRailResults
+                : styles.sideRailLive
+          } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""}`}
+        >
+          {room.phase === "lobby" ? (
+            <>
+              {lobbyInvitePanel}
+              {lobbyRulesPanel}
+              {lobbyChatPanel}
+            </>
+          ) : room.phase === "finished" ? (
           <>
             <section className={styles.railBlock}>
               <div className={styles.railHeading}>
@@ -2545,147 +3217,53 @@ function RoomExperience({
               <p className={styles.railBody}>{copy.resultsResetHint}</p>
             </section>
           </>
-        ) : (
-          <>
-            <section className={`${styles.railBlock} ${styles.liveRailBlock}`}>
-            <div className={styles.railHeading}>
-              <span>{liveBoardLabel}</span>
-              <strong>{liveBoardTitle}</strong>
-            </div>
+          ) : (
+            <>
+              {showCompactLiveRoster ? livePlayersCompactPanel : livePlayersPanel}
+              {liveChatPanel}
+            </>
+          )}
+        </aside>
+      ) : null}
 
-            <div className={styles.liveRailContent}>
-              <div className={styles.leaderboardSection}>
-                <div className={styles.leaderboard} data-testid="leaderboard">
-                  {sortedPlayers.map((candidate, index) => {
-                    const status = room.round?.playerStatuses.find(
-                      (entry) => entry.playerId === candidate.id
-                    );
-                    const state = getLeaderboardState(status);
-
-                    return (
-                      <div
-                        className={styles.leaderRow}
-                        data-me={candidate.id === playerId}
-                        data-state={state}
-                        key={candidate.id}
-                      >
-                        <div className={styles.leaderRowMain}>
-                          <span>{String(index + 1).padStart(2, "0")}</span>
-                          <div>
-                            <h5>{candidate.name}</h5>
-                            <p>
-                              {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
-                              {getRoundBoardStatus(locale, status)}
-                            </p>
-                          </div>
-                        </div>
-                        <div className={styles.leaderRowScore}>
-                          <strong>{candidate.score}</strong>
-                        </div>
-
-                        {room.phase === "round-active" &&
-                        status?.lastSubmissionKind &&
-                        !status.hasSubmitted &&
-                        status.lastSubmissionText ? (
-                          <div className={styles.leaderBubble} data-kind={status.lastSubmissionKind}>
-                            {status.lastSubmissionText}
-                          </div>
-                        ) : room.phase === "round-active" && recentChatByPlayer.get(candidate.id) ? (
-                          <div className={styles.leaderBubble} data-kind="chat">
-                            {recentChatByPlayer.get(candidate.id)?.text}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {spectatorCount > 0 ? (
-                  <div className={styles.liveSpectatorPanel}>
-                    <div className={styles.railHeading}>
-                      <span>{copy.spectatorLabel}</span>
-                      <strong>{copy.spectatorTitle}</strong>
-                    </div>
-                    <div className={styles.spectatorSummary} data-testid="live-spectator-count-card">
-                      <strong>
-                        {locale === "ko"
-                          ? `현재 관전자 ${spectatorCount}명`
-                          : `${spectatorCount} spectator${spectatorCount === 1 ? "" : "s"}`}
-                      </strong>
-                      <p>
-                        {locale === "ko"
-                          ? "관전자는 점수판과 정답 공개만 보고, 라운드가 끝나면 로비로 함께 돌아갑니다."
-                          : "Spectators follow the board and return to the lobby when the round ends."}
-                      </p>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-            </div>
-
-            <div className={styles.railFoot}>
-              <p className={styles.compactHint}>
-                {locale === "ko"
-                  ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
-                  : `${submittedCount}/${room.players.length} players are correct.`}
-              </p>
-            </div>
-            </section>
-
-            <section
-              className={`${styles.railBlock} ${styles.lobbyChatBlock} ${styles.liveChatBlock}`}
-              data-testid="chat-panel"
+      {showPeekRail ? (
+        <div className={styles.railPeekDock}>
+          {railPanels.map((panel) => (
+            <button
+              aria-expanded={activeRailPanel === panel.id}
+              className={styles.railPeekButton}
+              data-active={activeRailPanel === panel.id}
+              key={panel.id}
+              onClick={() => toggleRailPanel(panel.id)}
+              style={{ "--rail-tab-top": getRailPanelAnchorTop(panel.id, room.phase) } as CSSProperties}
+              type="button"
             >
-              <div className={styles.railHeading}>
-                <span>{copy.feedLabel}</span>
-                <strong>{copy.feedTitle}</strong>
-              </div>
-              <div className={styles.chatScrollWell} ref={chatListRef}>
-                <div className={`${styles.chatList} ${styles.liveChatList}`} data-testid="chat-list">
-                  {visibleChatFeed.length === 0 ? (
-                    <p className={styles.railBody}>{copy.noChatYet}</p>
-                  ) : (
-                    visibleChatFeed.map((entry) =>
-                      entry.kind === "system" ? (
-                        <div className={styles.systemChatLine} data-kind={entry.systemKey} key={entry.id}>
-                          <span>{getSystemChatMessage(entry, locale)}</span>
-                        </div>
-                      ) : (
-                        <div className={styles.chatLine} key={entry.id}>
-                          <strong>{entry.playerName}</strong>
-                          <span>{entry.text}</span>
-                        </div>
-                      )
-                    )
-                  )}
-                </div>
-              </div>
+              <span className={styles.railPeekLabel}>{panel.tabLabel}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-              <form className={styles.chatComposer} onSubmit={handleChatSubmit}>
-                <input
-                  ref={chatInputRef}
-                  data-testid="chat-input"
-                  maxLength={180}
-                  onChange={(event) => setChatDraft(event.target.value)}
-                  placeholder={copy.chatPlaceholder}
-                  type="text"
-                  value={chatDraft}
-                />
-                <button
-                  className={styles.primaryAction}
-                  data-testid="chat-send-button"
-                  disabled={!chatDraft.trim() || isSendingChat}
-                  type="submit"
-                >
-                  {isSendingChat ? copy.sendingChat : copy.sendChat}
-                </button>
-              </form>
-              <p className={styles.compactHint}>{copy.feedHint}</p>
-            </section>
-          </>
-        )}
-      </aside>
+      {showRailDrawer && renderedRailDescriptor ? (
+        <div
+          className={styles.railDrawerOverlay}
+          data-open={isRailDrawerVisible}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeRailDrawer();
+            }
+          }}
+          style={{ "--drawer-anchor-top": activeDrawerAnchorTop } as CSSProperties}
+        >
+          <aside
+            className={styles.railDrawer}
+            data-panel-id={renderedRailDescriptor.id}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {renderedRailDescriptor.content}
+          </aside>
+        </div>
+      ) : null}
 
       {room.phase === "round-ended" && room.round ? (
         <div className={styles.screenOverlay} data-phase="reveal">
@@ -3266,11 +3844,7 @@ function RoomExperience({
                 {copy.closePanel}
               </button>
             </div>
-            <ul className={styles.noteList}>
-              {rulesSummary.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
+            <RuleSummaryList locale={locale} summary={rulesSummary} />
             <div className={styles.railActionRow}>
               <button
                 className={styles.secondaryAction}
@@ -3462,95 +4036,260 @@ function getNotReadyBadge(locale: Locale) {
   return locale === "ko" ? "미준비" : "not ready";
 }
 
-function getRuleLines(locale: Locale, settings: LobbySettings) {
-  const lines =
-    locale === "ko"
-      ? [
-          `${getModeLabelByLocale(locale, settings.mode)}`,
-          `${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
-          settings.mode === "binary"
-            ? getBinaryRatioSummary(locale, settings.baseConversionPair)
-            : "소인수는 공백으로 구분해서 입력",
-          settings.mode === "binary"
-            ? `실시간 변환 프리뷰: ${settings.binaryLivePreview ? "켜짐" : "꺼짐"}`
-            : "",
-          settings.mode === "factor"
-            ? getFactorResolutionSummary(locale, settings.factorResolutionMode)
-            : "",
-          settings.mode === "factor"
-            ? settings.factorPrimeAnswerMode === "number"
-              ? '소수 문제는 숫자 하나만 입력'
-              : '소수 문제는 기본적으로 "야호 소수다" 입력'
-            : "",
-          settings.mode === "factor"
-            ? settings.factorOrderedAnswer
-              ? "하드 모드: 소인수의 순서까지 정확히 맞춰야 정답"
-              : "기본 모드: 소인수 순서는 자유"
-            : "",
-          settings.mode === "factor" &&
-          settings.factorResolutionMode !== "golden-bell" &&
-          settings.factorSingleAttempt
+function getResponsiveRoomLayoutState({
+  phase,
+  playerCount,
+  viewportWidth,
+  viewportHeight,
+  viewportScale
+}: {
+  phase: RoomSnapshot["phase"];
+  playerCount: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  viewportScale: number;
+}): ResponsiveRoomLayoutState {
+  const isMobileViewport = viewportWidth < 760;
+  const density: DensityMode =
+    isMobileViewport || viewportWidth < 860 || viewportHeight < 620 || viewportScale > 1.42
+      ? "tight"
+      : viewportWidth < 1040 || viewportHeight < 720 || viewportScale > 1.22
+        ? "compact"
+        : "normal";
+  const railMode: RailMode =
+    isMobileViewport
+      ? "inline"
+      : phase !== "finished" &&
+          (viewportWidth < 940 ||
+            (phase === "round-active" && viewportHeight < 660) ||
+            (viewportScale > 1.24 && viewportWidth < 1260))
+      ? "peek"
+      : "inline";
+  const lobbyRulesMode: LobbyRulesMode =
+    phase === "lobby" &&
+    (
+      isMobileViewport ||
+      viewportHeight < 780 ||
+      density === "tight" ||
+      (viewportWidth < 1220 && viewportHeight < 860) ||
+      viewportScale > 1.12
+    )
+      ? "modal"
+      : "inline";
+  const shouldCompactRoundRoster =
+    phase === "round-active" &&
+    ((playerCount <= 2 &&
+      (viewportHeight < 700 || viewportWidth < 980 || viewportScale > 1.24)) ||
+      (playerCount >= 3 &&
+        playerCount <= 4 &&
+        (viewportHeight < 750 ||
+          viewportWidth < 1080 ||
+          (density === "tight" && viewportHeight < 820) ||
+          viewportScale > 1.14)) ||
+      (playerCount >= 5 &&
+        playerCount <= 6 &&
+        (viewportHeight < 710 ||
+          viewportWidth < 980 ||
+          (density === "tight" && viewportHeight < 780) ||
+          viewportScale > 1.18)) ||
+      (playerCount >= 7 &&
+        (viewportHeight < 860 ||
+          density === "tight" ||
+          viewportWidth < 1420 ||
+          viewportHeight < 920 ||
+          viewportScale > 1.02)));
+  const roundRosterMode: RoundRosterMode =
+    shouldCompactRoundRoster ? "compact" : "full";
+
+  return {
+    density,
+    railMode,
+    lobbyRulesMode,
+    roundRosterMode,
+    isMobileViewport
+  };
+}
+
+function getPageScrollMode(
+  phase: RoomSnapshot["phase"] | "landing",
+  viewportWidth: number,
+  viewportHeight: number,
+  viewportScale: number,
+  horizontalOverflow: boolean,
+  verticalOverflow: boolean
+): ScrollMode {
+  if (viewportWidth < 760) {
+    return "scroll";
+  }
+
+  if (phase === "round-active" || phase === "round-ended") {
+    if (
+      horizontalOverflow ||
+      verticalOverflow ||
+      viewportScale > 1.42 ||
+      viewportWidth < 920 ||
+      viewportHeight < 610 ||
+      (viewportWidth < 1100 && viewportHeight < 690) ||
+      (viewportScale > 1.24 && viewportWidth < 1240)
+    ) {
+      return "scroll";
+    }
+
+    return "fit";
+  }
+
+  if (
+    horizontalOverflow ||
+    verticalOverflow ||
+    viewportScale > 1.4 ||
+    viewportWidth < 980 ||
+    (viewportWidth < 1120 && viewportScale > 1.18) ||
+    viewportHeight < 620 ||
+    (viewportHeight < 720 && viewportWidth < 1000)
+  ) {
+    return "scroll";
+  }
+
+  return "fit";
+}
+
+function getRailPanelAnchorTop(panelId: RailPanelId, phase: RoomSnapshot["phase"]) {
+  if (phase === "lobby") {
+    if (panelId === "invite") {
+      return "1.4rem";
+    }
+
+    if (panelId === "rules") {
+      return "8.2rem";
+    }
+
+    return "15.1rem";
+  }
+
+  if (phase === "round-active") {
+    return panelId === "players" ? "6.8rem" : "15rem";
+  }
+
+  return "1.4rem";
+}
+
+type RuleSummary = {
+  primaryLines: string[];
+  additionalLines: string[];
+};
+
+function RuleSummaryList({ locale, summary }: { locale: Locale; summary: RuleSummary }) {
+  return (
+    <div className={styles.ruleSummary}>
+      <ul className={styles.noteList}>
+        {summary.primaryLines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {summary.additionalLines.length > 0 ? (
+        <div className={styles.ruleSummarySection}>
+          <span className={styles.ruleSummaryHeading}>
+            {locale === "ko" ? "추가 규칙" : "Additional rules"}
+          </span>
+          <ul className={`${styles.noteList} ${styles.noteSubList}`}>
+            {summary.additionalLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
+  if (locale === "ko") {
+    if (settings.mode === "factor") {
+      return {
+        primaryLines: [
+          `${getModeLabelByLocale(locale, settings.mode)} (${getFactorResolutionSummary(locale, settings.factorResolutionMode)})`,
+          `플레이 시간: ${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
+          settings.factorPrimeAnswerMode === "number"
+            ? "답변 입력 규칙: 소인수는 공백으로 구분해서 입력 · 소수일 경우 숫자 하나 입력"
+            : '답변 입력 규칙: 소인수는 공백으로 구분해서 입력 · 소수일 경우 "야호 소수다" 입력'
+        ],
+        additionalLines: [
+          settings.factorOrderedAnswer ? "소인수 순서까지 맞춰야 정답" : "소인수 순서는 자유",
+          settings.factorResolutionMode !== "golden-bell" && settings.factorSingleAttempt
             ? "정답 시도 기회는 1회만 허용"
-            : settings.mode === "factor" && settings.factorResolutionMode !== "golden-bell"
+            : settings.factorResolutionMode !== "golden-bell"
               ? "오답 후 재입력 가능"
               : "",
-          settings.mode === "factor" &&
-          settings.factorResolutionMode === "all-play" &&
-          settings.factorSuddenDeath
+          settings.factorResolutionMode === "all-play" && settings.factorSuddenDeath
             ? "시간 안에 아무도 못 맞추면 서든데스로 전환"
             : "",
-          settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
+          settings.factorResolutionMode === "golden-bell"
             ? settings.factorGoldenBellSingleAttempt
               ? `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 잠김`
               : `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 재도전 가능`
-            : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
+            : settings.factorResolutionMode === "first-correct"
               ? "첫 정답이 나오면 즉시 공개 단계로 이동"
-              : "시간 종료 또는 전원 정답 시 공개 단계로 이동"
-        ]
-      : [
-          `${getModeLabelByLocale(locale, settings.mode)}`,
-          `${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
-          settings.mode === "binary"
-            ? getBinaryRatioSummary(locale, settings.baseConversionPair)
-            : "Separate prime factors with spaces",
-          settings.mode === "binary"
-            ? `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`
-            : "",
-          settings.mode === "factor"
-            ? getFactorResolutionSummary(locale, settings.factorResolutionMode)
-            : "",
-          settings.mode === "factor"
-            ? settings.factorPrimeAnswerMode === "number"
-              ? "Prime targets: enter the number only"
-              : 'Prime targets: enter "야호 소수다" by default'
-            : "",
-          settings.mode === "factor"
-            ? settings.factorOrderedAnswer
-              ? "Hard mode: factor order must match exactly"
-              : "Default mode: factor order does not matter"
-            : "",
-          settings.mode === "factor" &&
-          settings.factorResolutionMode !== "golden-bell" &&
-          settings.factorSingleAttempt
-            ? "Only one answer attempt is allowed"
-            : settings.mode === "factor" && settings.factorResolutionMode !== "golden-bell"
-              ? "Wrong answers can be retried"
-              : "",
-          settings.mode === "factor" &&
-          settings.factorResolutionMode === "all-play" &&
-          settings.factorSuddenDeath
-            ? "If nobody solves in time, the room flips into sudden death"
-            : "",
-          settings.mode === "factor" && settings.factorResolutionMode === "golden-bell"
-            ? settings.factorGoldenBellSingleAttempt
-              ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · locks after one miss`
-              : `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · retries allowed`
-            : settings.mode === "factor" && settings.factorResolutionMode === "first-correct"
-              ? "The first correct answer immediately triggers reveal"
-              : "Reveal happens on timeout or when everyone is correct"
-        ];
+              : ""
+        ].filter(Boolean)
+      };
+    }
 
-  return lines.filter(Boolean);
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)}`,
+        `플레이 시간: ${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
+        "답변 입력 규칙: 문제에 표시된 목표 진법으로 입력"
+      ],
+      additionalLines: [
+        `변환 쌍: ${getBinaryRatioSummary(locale, settings.baseConversionPair)}`,
+        `실시간 변환 프리뷰: ${settings.binaryLivePreview ? "켜짐" : "꺼짐"}`
+      ]
+    };
+  }
+
+  if (settings.mode === "factor") {
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)} (${getFactorResolutionSummary(locale, settings.factorResolutionMode)})`,
+        `Play time: ${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
+        settings.factorPrimeAnswerMode === "number"
+          ? "Answer rules: separate prime factors with spaces · prime targets use the number only"
+          : 'Answer rules: separate prime factors with spaces · prime targets use "야호 소수다"'
+      ],
+      additionalLines: [
+        settings.factorOrderedAnswer
+          ? "Factor order must match exactly"
+          : "Factor order does not matter",
+        settings.factorResolutionMode !== "golden-bell" && settings.factorSingleAttempt
+          ? "Only one answer attempt is allowed"
+          : settings.factorResolutionMode !== "golden-bell"
+            ? "Wrong answers can be retried"
+            : "",
+        settings.factorResolutionMode === "all-play" && settings.factorSuddenDeath
+          ? "If nobody solves in time, the room flips into sudden death"
+          : "",
+        settings.factorResolutionMode === "golden-bell"
+          ? settings.factorGoldenBellSingleAttempt
+            ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · locks after one miss`
+            : `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · retries allowed`
+          : settings.factorResolutionMode === "first-correct"
+            ? "The first correct answer immediately triggers reveal"
+            : ""
+      ].filter(Boolean)
+    };
+  }
+
+  return {
+    primaryLines: [
+      `${getModeLabelByLocale(locale, settings.mode)}`,
+      `Play time: ${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
+      "Answer rules: enter the value in the target base shown by the prompt"
+    ],
+    additionalLines: [
+      `Conversion pair: ${getBinaryRatioSummary(locale, settings.baseConversionPair)}`,
+      `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`
+    ]
+  };
 }
 
 function getRoundTimeSummary(locale: Locale, settings: LobbySettings) {
@@ -3858,6 +4597,22 @@ function ThemeModeIcon({ mode }: { mode: "light" | "dark" }) {
         d="M14.35 2.2c-3.92.98-6.6 4.78-6.18 8.85.45 4.43 4.41 7.67 8.84 7.22 2.2-.22 4.18-1.31 5.57-2.96-.67 3.59-3.8 6.38-7.67 6.76-5.23.52-9.9-3.28-10.43-8.51C3.95 8.68 7.76 4 12.99 3.48c.46-.05.91-.07 1.36-.05Z"
         fill="currentColor"
       />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M2.5 12s3.6-5.5 9.5-5.5 9.5 5.5 9.5 5.5-3.6 5.5-9.5 5.5S2.5 12 2.5 12Z"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.7"
+      />
+      <circle cx="12" cy="12" fill="currentColor" r="2.4" />
     </svg>
   );
 }
