@@ -307,7 +307,6 @@ export const DEFAULT_MATCH_SETTINGS: MatchSettings = {
   allowMidMatchJoin: false
 };
 
-const FACTOR_PRIMES = [2, 3, 5, 7, 11, 13, 17, 19];
 const ROOM_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
   "0": "⁰",
@@ -497,18 +496,20 @@ export function formatPrimeFactorsPretty(primeFactors: number[]) {
 function createFactorChallenge(settings: LobbySettings, randomValue: () => number): Challenge {
   const targetDigits = randomValue() < 0.75 ? 4 : 3;
   const [minValue, maxValue] = targetDigits === 4 ? [1000, 9999] : [100, 999];
+  const compositeNumber = randomInt(minValue, maxValue, randomValue);
+  const primeFactors = factorizeNumber(compositeNumber);
+  const isPrimeTarget = primeFactors.length === 1 && primeFactors[0] === compositeNumber;
 
-  if (randomValue() < 0.18) {
-    const primeNumber = createPrimeTarget(minValue, maxValue, randomValue);
+  if (isPrimeTarget) {
     const primeAnswer =
       settings.factorPrimeAnswerMode === "number"
-        ? String(primeNumber)
+        ? String(compositeNumber)
         : FACTOR_PRIME_SHOUT;
 
     return {
       id: createId("factor", randomValue),
       mode: "factor",
-      prompt: `Factorize ${primeNumber} into prime factors.`,
+      prompt: `Factorize ${compositeNumber} into prime factors.`,
       helperText:
         settings.factorPrimeAnswerMode === "number"
           ? "If the number itself is prime, enter the number only."
@@ -516,8 +517,8 @@ function createFactorChallenge(settings: LobbySettings, randomValue: () => numbe
       answer: primeAnswer,
       prettyAnswer: primeAnswer,
       meta: {
-        compositeNumber: primeNumber,
-        primeFactors: [primeNumber],
+        compositeNumber,
+        primeFactors,
         isPrimeTarget: true,
         primeAnswerMode: settings.factorPrimeAnswerMode,
         requiresOrderedAnswer: false
@@ -525,60 +526,18 @@ function createFactorChallenge(settings: LobbySettings, randomValue: () => numbe
     };
   }
 
-  for (let attempt = 0; attempt < 400; attempt += 1) {
-    const factorCount = targetDigits === 4 ? randomInt(4, 6, randomValue) : randomInt(3, 5, randomValue);
-    const primeFactors: number[] = [];
-    let compositeNumber = 1;
-
-    for (let factorIndex = 0; factorIndex < factorCount; factorIndex += 1) {
-      const prime = pickRandomPrime(randomValue);
-      primeFactors.push(prime);
-      compositeNumber *= prime;
-
-      if (compositeNumber > maxValue) {
-        break;
-      }
-    }
-
-    if (compositeNumber < minValue || compositeNumber > maxValue) {
-      continue;
-    }
-
-    primeFactors.sort((left, right) => left - right);
-    const prettyAnswer = formatPrimeFactorsPretty(primeFactors);
-
-    return {
-      id: createId("factor", randomValue),
-      mode: "factor",
-      prompt: `Factorize ${compositeNumber} into prime factors.`,
-      helperText: settings.factorOrderedAnswer
-        ? "Keep the factors in the original decomposition order and separate them with spaces."
-        : "Separate the factors with spaces. Example: 2 2 3 7.",
-      answer: primeFactors.join(" "),
-      prettyAnswer,
-      meta: {
-        compositeNumber,
-        primeFactors,
-        isPrimeTarget: false,
-        primeAnswerMode: settings.factorPrimeAnswerMode,
-        requiresOrderedAnswer: settings.factorOrderedAnswer
-      }
-    };
-  }
-
-  const fallbackFactors = [7, 11, 13];
   return {
     id: createId("factor", randomValue),
     mode: "factor",
-    prompt: "Factorize 1001 into prime factors.",
+    prompt: `Factorize ${compositeNumber} into prime factors.`,
     helperText: settings.factorOrderedAnswer
-      ? "Keep the factors in order and separate them with spaces. Example: 7 11 13."
-      : "Separate the factors with spaces. Example: 7 11 13.",
-    answer: fallbackFactors.join(" "),
-    prettyAnswer: formatPrimeFactorsPretty(fallbackFactors),
+      ? "Keep the factors in the original decomposition order and separate them with spaces."
+      : "Separate the factors with spaces. Example: 2 2 3 7.",
+    answer: primeFactors.join(" "),
+    prettyAnswer: formatPrimeFactorsPretty(primeFactors),
     meta: {
-      compositeNumber: 1001,
-      primeFactors: fallbackFactors,
+      compositeNumber,
+      primeFactors,
       isPrimeTarget: false,
       primeAnswerMode: settings.factorPrimeAnswerMode,
       requiresOrderedAnswer: settings.factorOrderedAnswer
@@ -737,47 +696,27 @@ function randomInt(min: number, max: number, randomValue: () => number) {
   return Math.floor(randomValue() * (max - min + 1)) + min;
 }
 
-function pickRandomPrime(randomValue: () => number) {
-  return FACTOR_PRIMES[randomInt(0, FACTOR_PRIMES.length - 1, randomValue)] ?? 2;
-}
+function factorizeNumber(value: number) {
+  const primeFactors: number[] = [];
+  let remainder = value;
 
-function createPrimeTarget(minValue: number, maxValue: number, randomValue: () => number) {
-  for (let attempt = 0; attempt < 600; attempt += 1) {
-    let candidate = randomInt(minValue, maxValue, randomValue);
-    if (candidate % 2 === 0) {
-      candidate += 1;
-    }
-    if (candidate > maxValue) {
-      candidate -= 2;
-    }
-    if (candidate >= minValue && isPrimeNumber(candidate)) {
-      return candidate;
+  while (remainder % 2 === 0) {
+    primeFactors.push(2);
+    remainder /= 2;
+  }
+
+  for (let divisor = 3; divisor * divisor <= remainder; divisor += 2) {
+    while (remainder % divisor === 0) {
+      primeFactors.push(divisor);
+      remainder /= divisor;
     }
   }
 
-  return minValue >= 1000 ? 1009 : 997;
-}
-
-function isPrimeNumber(value: number) {
-  if (value < 2) {
-    return false;
+  if (remainder > 1) {
+    primeFactors.push(remainder);
   }
 
-  if (value === 2) {
-    return true;
-  }
-
-  if (value % 2 === 0) {
-    return false;
-  }
-
-  for (let divisor = 3; divisor * divisor <= value; divisor += 2) {
-    if (value % divisor === 0) {
-      return false;
-    }
-  }
-
-  return true;
+  return primeFactors;
 }
 
 function toSuperscript(value: number) {
