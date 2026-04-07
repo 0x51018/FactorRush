@@ -16,7 +16,6 @@
 import {
   startTransition,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -1972,7 +1971,7 @@ function RoomExperience({
     };
   }, [room.phase, sortedPlayers.length]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -2223,21 +2222,21 @@ function RoomExperience({
     inDrawer?: boolean;
     actions?: ReactNode;
   }) => {
-    const headerActions =
-      actions || inDrawer ? (
-        <div className={styles.drawerPanelActions}>
-          {actions}
-          {inDrawer ? (
-            <button
-              className={`${styles.secondaryAction} ${styles.modalCloseButton} ${styles.drawerPanelCloseButton}`}
-              onClick={closeRailDrawer}
-              type="button"
-            >
-              {copy.closePanel}
-            </button>
-          ) : null}
-        </div>
-      ) : null;
+    const hasHeaderActions = actions != null || inDrawer;
+    const headerActions = hasHeaderActions ? (
+      <div className={styles.drawerPanelActions}>
+        {actions}
+        {inDrawer ? (
+          <button
+            className={`${styles.secondaryAction} ${styles.modalCloseButton} ${styles.drawerPanelCloseButton}`}
+            onClick={closeRailDrawer}
+            type="button"
+          >
+            {copy.closePanel}
+          </button>
+        ) : null}
+      </div>
+    ) : null;
 
     if (!headerActions) {
       return (
@@ -2301,19 +2300,11 @@ function RoomExperience({
 
   const lobbyRulesPanel = (
     <section className={styles.railBlock}>
-      {showExpandedRulesPanel ? (
-        renderRailPanelHeader({
-          label: copy.lobbyRuleCardLabel,
-          title: copy.lobbyRuleCardTitle,
-          inDrawer: rulesInDrawer
-        })
-      ) : (
-        renderRailPanelHeader({
-          label: copy.lobbyRuleCardLabel,
-          title: copy.lobbyRuleCardTitle,
-          inDrawer: rulesInDrawer
-        })
-      )}
+      {renderRailPanelHeader({
+        label: copy.lobbyRuleCardLabel,
+        title: copy.lobbyRuleCardTitle,
+        inDrawer: rulesInDrawer
+      })}
       {showExpandedRulesPanel ? (
         <>
           <RuleSummaryList locale={locale} summary={rulesSummary} />
