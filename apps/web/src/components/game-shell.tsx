@@ -2668,6 +2668,7 @@ function RoomExperience({
       data-overlay-active={overlayActive}
       data-phase={room.phase}
       data-crowded-lobby={isCrowdedLobbyRoster ? "true" : undefined}
+      data-mobile-viewport={isMobileViewport ? "true" : "false"}
       data-rail-mode={effectiveRailMode}
       data-scroll-mode={pageScrollMode}
       data-round-roster-mode={room.phase === "round-active" ? roundRosterMode : undefined}

@@ -4163,6 +4163,15 @@
   .roomLayout[data-rail-mode="peek"] .stageColumn {
     padding-right: 2.2rem;
   }
+
+  .roomLayout[data-mobile-viewport="false"] {
+    grid-template-columns: minmax(0, 2.14fr) minmax(var(--room-rail-width), 0.78fr);
+    grid-template-rows: none;
+  }
+
+  .roomLayout[data-mobile-viewport="false"][data-rail-mode="peek"] {
+    grid-template-columns: minmax(0, 1fr) var(--peek-rail-reserve);
+  }
 }
 
 @media (max-width: 1180px) {
