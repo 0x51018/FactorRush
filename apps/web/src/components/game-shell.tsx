@@ -1806,8 +1806,7 @@ function RoomExperience({
     room.phase === "round-active" &&
     effectiveRailMode === "inline" &&
     roundRosterMode === "compact";
-  const canUseRailDrawer =
-    peekRailAvailable || (room.phase === "round-active" && roundRosterMode === "compact");
+  const canUseRailDrawer = peekRailAvailable;
   const isScrollRoom = pageScrollMode === "scroll";
   const roomLayoutStyle = {
     "--peek-rail-dock-top": `${roomLayoutViewportTop}px`,
@@ -2007,16 +2006,13 @@ function RoomExperience({
         : room.phase === "finished"
           ? new Set<RailPanelId>()
           : new Set<RailPanelId>(["players", "chat"]);
-    const canKeepPlayersDrawer =
-      room.phase === "round-active" && roundRosterMode === "compact" && activeRailPanel === "players";
-
     if (
       !availablePanelIds.has(activeRailPanel) ||
-      (effectiveRailMode === "inline" && !canKeepPlayersDrawer)
+      effectiveRailMode === "inline"
     ) {
       setActiveRailPanel(null);
     }
-  }, [activeRailPanel, effectiveRailMode, room.phase, roundRosterMode]);
+  }, [activeRailPanel, effectiveRailMode, room.phase]);
 
   useEffect(() => {
     if (isSettingsOpen || isMatchSettingsOpen || isRulesOpen || isScoreGuideOpen) {
@@ -2416,6 +2412,8 @@ function RoomExperience({
             {sortedPlayers.map((candidate, index) => {
               const status = room.round?.playerStatuses.find((entry) => entry.playerId === candidate.id);
               const state = getLeaderboardState(status);
+              const roundBoardStatus = getRoundBoardStatus(locale, status);
+              const attemptCount = status?.attemptCount ?? 0;
 
               return (
                 <div
@@ -2423,18 +2421,34 @@ function RoomExperience({
                   data-me={candidate.id === playerId}
                   data-state={state}
                   key={candidate.id}
+                  title={showCompactLiveRoster ? roundBoardStatus : undefined}
                 >
                   <div className={styles.leaderRowMain}>
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    <div>
-                      <h5>{candidate.name}</h5>
-                      <p>
-                        {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
-                        {getRoundBoardStatus(locale, status)}
-                      </p>
+                    <span className={styles.leaderRank}>{String(index + 1).padStart(2, "0")}</span>
+                    <div className={styles.leaderIdentity}>
+                      <div className={styles.leaderTitleLine}>
+                        <h5 title={candidate.name}>{candidate.name}</h5>
+                        {showCompactLiveRoster && attemptCount > 0 ? (
+                          <span className={styles.leaderAttemptsBadge}>
+                            {locale === "ko" ? `시도 ${attemptCount}` : `T ${attemptCount}`}
+                          </span>
+                        ) : null}
+                      </div>
+                      {!showCompactLiveRoster ? (
+                        <p>
+                          {locale === "ko" ? "시도" : "tries"} {attemptCount} · {roundBoardStatus}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                   <div className={styles.leaderRowScore}>
+                    {showCompactLiveRoster ? (
+                      <span
+                        aria-hidden="true"
+                        className={styles.leaderStateDot}
+                        title={roundBoardStatus}
+                      />
+                    ) : null}
                     <strong>{candidate.score}</strong>
                   </div>
 
@@ -3230,7 +3244,7 @@ function RoomExperience({
           </>
           ) : (
             <>
-              {showCompactLiveRoster ? livePlayersCompactPanel : livePlayersPanel}
+              {livePlayersPanel}
               {liveChatPanel}
             </>
           )}
@@ -4092,26 +4106,27 @@ function getResponsiveRoomLayoutState({
       : "inline";
   const shouldCompactRoundRoster =
     phase === "round-active" &&
+    railMode === "inline" &&
     ((playerCount <= 2 &&
-      (viewportHeight < 700 || viewportWidth < 980 || viewportScale > 1.24)) ||
+      (viewportHeight < 680 ||
+        (viewportWidth < 980 && viewportHeight < 820) ||
+        viewportScale > 1.28)) ||
       (playerCount >= 3 &&
         playerCount <= 4 &&
-        (viewportHeight < 750 ||
-          viewportWidth < 1080 ||
-          (density === "tight" && viewportHeight < 820) ||
-          viewportScale > 1.14)) ||
+        (viewportHeight < 720 ||
+          (viewportWidth < 1080 && viewportHeight < 860) ||
+          viewportScale > 1.18)) ||
       (playerCount >= 5 &&
         playerCount <= 6 &&
-        (viewportHeight < 710 ||
-          viewportWidth < 980 ||
-          (density === "tight" && viewportHeight < 780) ||
-          viewportScale > 1.18)) ||
+        (viewportHeight < 760 ||
+          (viewportWidth < 1220 && viewportHeight < 900) ||
+          (density === "tight" && viewportHeight < 820) ||
+          viewportScale > 1.12)) ||
       (playerCount >= 7 &&
-        (viewportHeight < 860 ||
+        (viewportHeight < 800 ||
+          (viewportWidth < 1340 && viewportHeight < 920) ||
           density === "tight" ||
-          viewportWidth < 1420 ||
-          viewportHeight < 920 ||
-          viewportScale > 1.02)));
+          viewportScale > 1.06)));
   const roundRosterMode: RoundRosterMode =
     shouldCompactRoundRoster ? "compact" : "full";
 
