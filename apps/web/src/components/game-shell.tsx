@@ -31,9 +31,11 @@ import { io, type Socket } from "socket.io-client";
 import {
   DEFAULT_LOBBY_SETTINGS,
   DEFAULT_MATCH_SETTINGS,
+  FACTOR_PRIME_SHOUT,
   GOLDEN_BELL_PENALTY_POINTS,
   MAX_PLAYERS_PER_ROOM,
   PLAYER_NAME_MAX_LENGTH,
+  RETRY_WRONG_ANSWER_PENALTY_PERCENT,
   SCORE_BASE_POINTS_BY_RANK,
   SCORE_FALLBACK_POINTS,
   SCORE_SPEED_BONUS_PER_SECOND,
@@ -3933,12 +3935,15 @@ function RoomExperience({
 
                 <article className={styles.scoreGuideCard}>
                   <span className={styles.challengeLabel}>{copy.scoreGuidePenaltyHeading}</span>
-                  <BlockMath math={`\\operatorname{penalty}=-${GOLDEN_BELL_PENALTY_POINTS}`} />
+                  <BlockMath math={getRetryWrongAnswerPenaltyFormulaLatex()} />
+                  <BlockMath math={`\\operatorname{penalty}_{goldenBell}=-${GOLDEN_BELL_PENALTY_POINTS}`} />
                 </article>
 
                 <article className={styles.scoreGuideCard}>
                   <span className={styles.challengeLabel}>{copy.scoreGuideVariablesHeading}</span>
                   <div className={styles.scoreGuideVariables}>
+                    <BlockMath math={`\\operatorname{retryPenaltyRate}=${(RETRY_WRONG_ANSWER_PENALTY_PERCENT / 100).toFixed(2)}`} />
+                    <BlockMath math={"\\operatorname{scoreBefore}=\\text{current total score before a wrong answer}"} />
                     <BlockMath math={"\\operatorname{remainingMs}=\\operatorname{endsAt}-\\operatorname{submittedAt}"} />
                     <BlockMath math={"\\operatorname{answerWindowMs}=\\operatorname{answerWindowEndsAt}-\\operatorname{submittedAt}"} />
                     <BlockMath math={"\\operatorname{matchCap}=3600000\\,\\mathrm{ms}"} />
@@ -4202,7 +4207,7 @@ function RuleSummaryList({ locale, summary }: { locale: Locale; summary: RuleSum
   );
 }
 
-function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
+function getLegacyRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
   if (locale === "ko") {
     if (settings.mode === "factor") {
       return {
@@ -4288,6 +4293,98 @@ function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
     additionalLines: [
       `Conversion pair: ${getBinaryRatioSummary(locale, settings.baseConversionPair)}`,
       `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`
+    ]
+  };
+}
+
+function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
+  if (locale === "ko") {
+    if (settings.mode === "factor") {
+      return {
+        primaryLines: [
+          `${getModeLabelByLocale(locale, settings.mode)} (${getFactorResolutionSummary(locale, settings.factorResolutionMode)})`,
+          `플레이 시간: ${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
+          settings.factorPrimeAnswerMode === "number"
+            ? "답안 입력 규칙: 소인수는 공백으로 구분해 입력 · 소수 문제는 숫자 하나만 입력"
+            : `답안 입력 규칙: 소인수는 공백으로 구분해 입력 · 소수 문제는 \"${FACTOR_PRIME_SHOUT}\" 입력`
+        ],
+        additionalLines: [
+          settings.factorOrderedAnswer ? "소인수 순서까지 맞춰야 정답" : "소인수 순서는 자유",
+          settings.factorResolutionMode !== "golden-bell" && settings.factorSingleAttempt
+            ? "정답 시도 기회는 1회만 허용"
+            : settings.factorResolutionMode !== "golden-bell"
+              ? `오답 후 재입력 가능 · 현재 점수의 ${RETRY_WRONG_ANSWER_PENALTY_PERCENT}% 차감`
+              : "",
+          settings.factorResolutionMode === "all-play" && settings.factorSuddenDeath
+            ? "시간 안에 아무도 못 맞추면 서든데스로 전환"
+            : "",
+          settings.factorResolutionMode === "golden-bell"
+            ? settings.factorGoldenBellSingleAttempt
+              ? `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 잠김`
+              : `골든벨 실패 패널티: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)}점 · 오답 후 재도전 가능`
+            : settings.factorResolutionMode === "first-correct"
+              ? "첫 정답자가 나오면 즉시 공개 단계로 이동"
+              : ""
+        ].filter(Boolean)
+      };
+    }
+
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)}`,
+        `플레이 시간: ${settings.roundCount}라운드 · ${getRoundTimeSummary(locale, settings)}`,
+        "답안 입력 규칙: 문제에 표시된 목표 진법으로 입력"
+      ],
+      additionalLines: [
+        `변환 조합: ${getBinaryRatioSummary(locale, settings.baseConversionPair)}`,
+        `실시간 변환 프리뷰: ${settings.binaryLivePreview ? "켜짐" : "꺼짐"}`,
+        `오답마다 현재 점수의 ${RETRY_WRONG_ANSWER_PENALTY_PERCENT}% 차감`
+      ]
+    };
+  }
+
+  if (settings.mode === "factor") {
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)} (${getFactorResolutionSummary(locale, settings.factorResolutionMode)})`,
+        `Play time: ${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
+        settings.factorPrimeAnswerMode === "number"
+          ? "Answer rules: separate prime factors with spaces · prime targets use the number only"
+          : `Answer rules: separate prime factors with spaces · prime targets use \"${FACTOR_PRIME_SHOUT}\"`
+      ],
+      additionalLines: [
+        settings.factorOrderedAnswer
+          ? "Factor order must match exactly"
+          : "Factor order does not matter",
+        settings.factorResolutionMode !== "golden-bell" && settings.factorSingleAttempt
+          ? "Only one answer attempt is allowed"
+          : settings.factorResolutionMode !== "golden-bell"
+            ? `Wrong answers can be retried with a ${RETRY_WRONG_ANSWER_PENALTY_PERCENT}% score penalty`
+            : "",
+        settings.factorResolutionMode === "all-play" && settings.factorSuddenDeath
+          ? "If nobody solves in time, the room flips into sudden death"
+          : "",
+        settings.factorResolutionMode === "golden-bell"
+          ? settings.factorGoldenBellSingleAttempt
+            ? `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · locks after one miss`
+            : `Golden bell fail penalty: ${formatSignedScore(-GOLDEN_BELL_PENALTY_POINTS)} · retries allowed`
+          : settings.factorResolutionMode === "first-correct"
+            ? "The first correct answer immediately triggers reveal"
+            : ""
+      ].filter(Boolean)
+    };
+  }
+
+  return {
+    primaryLines: [
+      `${getModeLabelByLocale(locale, settings.mode)}`,
+      `Play time: ${settings.roundCount} rounds · ${getRoundTimeSummary(locale, settings)}`,
+      "Answer rules: enter the value in the target base shown by the prompt"
+    ],
+    additionalLines: [
+      `Conversion pair: ${getBinaryRatioSummary(locale, settings.baseConversionPair)}`,
+      `Live conversion preview: ${settings.binaryLivePreview ? "on" : "off"}`,
+      `Wrong answers deduct ${RETRY_WRONG_ANSWER_PENALTY_PERCENT}% of the current score`
     ]
   };
 }
@@ -4648,6 +4745,12 @@ function getBaseScoreFormulaLatex() {
   const fallbackRank = SCORE_BASE_POINTS_BY_RANK.length + 1;
 
   return `\\operatorname{base}(r)=\\begin{cases}${cases}\\\\${SCORE_FALLBACK_POINTS},&r\\ge ${fallbackRank}\\end{cases}`;
+}
+
+function getRetryWrongAnswerPenaltyFormulaLatex() {
+  const retryPenaltyRate = (RETRY_WRONG_ANSWER_PENALTY_PERCENT / 100).toFixed(2);
+
+  return `\\operatorname{penalty}_{retry}=\\begin{cases}0,&\\operatorname{scoreBefore}\\le 0\\\\-\\max\\left(1,\\operatorname{round}\\left(\\operatorname{scoreBefore}\\times ${retryPenaltyRate}\\right)\\right),&\\operatorname{scoreBefore}>0\\end{cases}`;
 }
 
 function getRecentChatByPlayer(chatFeed: RoomSnapshot["chatFeed"], now: number) {

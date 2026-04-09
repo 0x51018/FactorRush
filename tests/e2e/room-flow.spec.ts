@@ -33,7 +33,7 @@ function factorize(value: number) {
   return factors.join(" ");
 }
 
-function solveBaseConversionPrompt(prompt: string) {
+function parseBaseConversionPrompt(prompt: string) {
   const match = prompt.match(/Convert ([0-9A-F]+) from (binary|decimal|hexadecimal) to (binary|decimal|hexadecimal)\./i);
   if (!match) {
     throw new Error(`Unsupported base-conversion prompt: ${prompt}`);
@@ -42,8 +42,54 @@ function solveBaseConversionPrompt(prompt: string) {
   const [, rawValue, sourceLabel, targetLabel] = match;
   const sourceBase = sourceLabel.toLowerCase() === "binary" ? 2 : sourceLabel.toLowerCase() === "hexadecimal" ? 16 : 10;
   const targetBase = targetLabel.toLowerCase() === "binary" ? 2 : targetLabel.toLowerCase() === "hexadecimal" ? 16 : 10;
+  return { rawValue, sourceBase, targetBase };
+}
+
+function solveBaseConversionPrompt(prompt: string) {
+  const { rawValue, sourceBase, targetBase } = parseBaseConversionPrompt(prompt);
   const decimalValue = parseInt(rawValue, sourceBase);
   return targetBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(targetBase);
+}
+
+function getWrongBaseConversionAnswer(prompt: string) {
+  const { targetBase } = parseBaseConversionPrompt(prompt);
+  const correctAnswer = solveBaseConversionPrompt(prompt);
+
+  if (targetBase === 2) {
+    if (correctAnswer === "0") {
+      return "1";
+    }
+
+    return correctAnswer.endsWith("0")
+      ? `${correctAnswer.slice(0, -1)}1`
+      : `${correctAnswer.slice(0, -1)}0`;
+  }
+
+  if (targetBase === 10) {
+    return String(Number(correctAnswer) + 1);
+  }
+
+  const upperAnswer = correctAnswer.toUpperCase();
+  const replacement = upperAnswer.endsWith("F") ? "E" : "F";
+  return `${upperAnswer.slice(0, -1)}${replacement}`;
+}
+
+function getRetryPenalty(score: number) {
+  if (score <= 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(score * 0.1));
+}
+
+async function getLeaderboardScore(page: Page) {
+  const text = (await page.getByTestId("leaderboard").locator("strong").first().textContent()) ?? "";
+  const match = text.match(/-?\d+/);
+  if (!match) {
+    throw new Error(`No score found in leaderboard entry: ${text}`);
+  }
+
+  return Number(match[0]);
 }
 
 async function setRangeValue(locator: Locator, value: number) {
@@ -638,6 +684,60 @@ test("base conversion mode supports fixed conversion pairs", async ({ page }) =>
     path: ".codex-artifacts/qa-binary.png",
     fullPage: true
   });
+});
+
+test("factor retry mode deducts 10 percent of the current score after a wrong answer", async ({
+  page
+}) => {
+  await switchToEnglish(page);
+  await page.getByTestId("create-name-input").fill("PenaltyFactor");
+  await page.getByTestId("create-room-button").click();
+
+  await page.getByTestId("start-button").click();
+  await expect(page.getByTestId("answer-input")).toBeVisible();
+
+  const firstPrompt = (await page.locator("h4").first().textContent()) ?? "";
+  await page.getByTestId("answer-input").fill(factorize(extractFirstNumber(firstPrompt)));
+  await page.getByTestId("submit-answer-button").click();
+  await expect(page.getByTestId("round-reveal-panel")).toBeVisible();
+  await expect(page.getByTestId("answer-input")).toBeVisible({ timeout: 10_000 });
+
+  const scoreBeforePenalty = await getLeaderboardScore(page);
+  const expectedPenalty = getRetryPenalty(scoreBeforePenalty);
+
+  await page.getByTestId("answer-input").fill("4 4");
+  await page.getByTestId("submit-answer-button").click();
+
+  await expect(page.locator("body")).toContainText(`${expectedPenalty} points were deducted`);
+  await expect.poll(() => getLeaderboardScore(page)).toBe(scoreBeforePenalty - expectedPenalty);
+});
+
+test("base conversion mode also deducts 10 percent of the current score after a wrong answer", async ({
+  page
+}) => {
+  await switchToEnglish(page);
+  await page.getByTestId("create-name-input").fill("PenaltyBinary");
+  await page.getByTestId("create-mode-binary").click();
+  await page.getByTestId("create-room-button").click();
+
+  await page.getByTestId("start-button").click();
+  await expect(page.getByTestId("answer-input")).toBeVisible();
+
+  const firstPrompt = (await page.locator("h4").first().textContent()) ?? "";
+  await page.getByTestId("answer-input").fill(solveBaseConversionPrompt(firstPrompt));
+  await page.getByTestId("submit-answer-button").click();
+  await expect(page.getByTestId("round-reveal-panel")).toBeVisible();
+  await expect(page.getByTestId("answer-input")).toBeVisible({ timeout: 10_000 });
+
+  const scoreBeforePenalty = await getLeaderboardScore(page);
+  const expectedPenalty = getRetryPenalty(scoreBeforePenalty);
+  const nextPrompt = (await page.locator("h4").first().textContent()) ?? "";
+
+  await page.getByTestId("answer-input").fill(getWrongBaseConversionAnswer(nextPrompt));
+  await page.getByTestId("submit-answer-button").click();
+
+  await expect(page.locator("body")).toContainText(`${expectedPenalty} points were deducted`);
+  await expect.poll(() => getLeaderboardScore(page)).toBe(scoreBeforePenalty - expectedPenalty);
 });
 
 test("players can leave from the lobby and return to the main screen", async ({ browser }) => {
