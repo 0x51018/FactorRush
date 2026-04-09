@@ -2846,6 +2846,15 @@ function RoomExperience({
                       data-host={candidate.isHost}
                       data-me={candidate.id === playerId}
                       data-offline={!candidate.connected}
+                      data-ready-state={
+                        !candidate.connected
+                          ? "offline"
+                          : candidate.isHost
+                            ? "host"
+                            : candidate.isReady
+                              ? "ready"
+                              : "not-ready"
+                      }
                       data-testid="player-pod"
                       key={candidate.id}
                     >
