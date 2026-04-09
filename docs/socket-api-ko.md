@@ -167,7 +167,7 @@ interface SubmitAnswerResult {
 비고:
 
 - `isCorrect`가 `true`이면 서버가 점수 반영까지 끝낸 상태입니다.
-- 오답이라도 ack는 성공일 수 있으며, 이 경우 `isCorrect`만 `false`입니다.
+- 오답이라도 ack는 성공일 수 있으며, 이 경우 `isCorrect`는 `false`이고 재도전 허용 모드에서는 `scoreDelta`가 함께 내려올 수 있습니다.
 
 ### `round:next`
 

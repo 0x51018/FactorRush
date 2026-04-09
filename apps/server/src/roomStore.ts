@@ -16,6 +16,7 @@
  */
 import type { Server, Socket } from "socket.io";
 import {
+  calculateRetryWrongAnswerPenalty,
   DEFAULT_MATCH_SETTINGS,
   MAX_PLAYERS_PER_ROOM,
   PLAYER_NAME_MAX_LENGTH,
@@ -951,6 +952,8 @@ export class RoomStore {
         };
       }
 
+      const scorePenalty = this.getRetryWrongAnswerPenalty(room, player);
+      const scoreDelta = scorePenalty === 0 ? 0 : -scorePenalty;
       const submittedAt = Date.now();
       room.round.attempts.push({
         playerId: player.id,
@@ -958,8 +961,9 @@ export class RoomStore {
         normalizedAnswer: evaluation.normalizedAnswer,
         submittedAt,
         kind: "wrong",
-        scoreDelta: 0
+        scoreDelta
       });
+      player.score -= scorePenalty;
       this.addSystemChatMessage(room, {
         systemKey: "player-wrong",
         playerName: player.name,
@@ -973,6 +977,7 @@ export class RoomStore {
           isCorrect: false,
           normalizedAnswer: evaluation.normalizedAnswer,
           attemptCount: wrongAttemptCount + 1,
+          scoreDelta,
           isLockedOut:
             room.settings.factorSingleAttempt && room.settings.mode === "factor"
         }
@@ -1386,6 +1391,22 @@ export class RoomStore {
     return room.round?.attempts.filter(
       (attempt) => attempt.playerId === playerId && attempt.kind === "wrong"
     ).length ?? 0;
+  }
+
+  private getRetryWrongAnswerPenalty(room: RoomRecord, player: PlayerRecord) {
+    if (room.settings.mode === "binary") {
+      return calculateRetryWrongAnswerPenalty(player.score);
+    }
+
+    if (
+      room.settings.mode === "factor" &&
+      room.settings.factorResolutionMode !== "golden-bell" &&
+      !room.settings.factorSingleAttempt
+    ) {
+      return calculateRetryWrongAnswerPenalty(player.score);
+    }
+
+    return 0;
   }
 
   private expireGoldenBellClaim(roomId: string, playerId: string) {

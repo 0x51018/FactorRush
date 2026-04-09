@@ -21,6 +21,7 @@ export const SCORE_FALLBACK_POINTS = 40;
 export const SCORE_SPEED_BONUS_PER_SECOND = 2;
 export const GOLDEN_BELL_WINDOW_MS = 10_000;
 export const GOLDEN_BELL_PENALTY_POINTS = 60;
+export const RETRY_WRONG_ANSWER_PENALTY_PERCENT = 10;
 export const MATCH_MAX_DURATION_MS = 60 * 60 * 1000;
 
 export type GameMode = "factor" | "binary";
@@ -454,6 +455,17 @@ export function calculatePoints(rank: number, endsAt: number, submittedAt: numbe
   const speedBonus = Math.round(remainingMs / 1000) * SCORE_SPEED_BONUS_PER_SECOND;
   const basePoints = SCORE_BASE_POINTS_BY_RANK[rank - 1] ?? SCORE_FALLBACK_POINTS;
   return basePoints + speedBonus;
+}
+
+export function calculateRetryWrongAnswerPenalty(currentScore: number) {
+  if (currentScore <= 0) {
+    return 0;
+  }
+
+  return Math.max(
+    1,
+    Math.round((currentScore * RETRY_WRONG_ANSWER_PENALTY_PERCENT) / 100)
+  );
 }
 
 export function getBinaryPreviewValue(meta: BinaryChallengeMeta, value: string) {

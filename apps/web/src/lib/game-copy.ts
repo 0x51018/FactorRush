@@ -74,7 +74,8 @@ const COPY = {
     factorOrderedLabel: "소인수 순서까지 맞추기",
     factorOrderedHint: "같은 수라도 제시된 순서를 유지해야 정답 처리됩니다.",
     factorSingleAttemptLabel: "정답 시도 기회 1회 제한",
-    factorSingleAttemptHint: "한 번 틀리면 이번 라운드에서는 더 이상 정답을 제출할 수 없습니다.",
+    factorSingleAttemptHint:
+      "켜면 한 번 틀린 뒤 이번 라운드에서 잠기고, 끄면 오답마다 현재 점수의 10%가 차감된 뒤 다시 제출할 수 있습니다.",
     factorGoldenBellSingleAttemptLabel: "골든벨 오답 후 재도전 금지",
     factorGoldenBellSingleAttemptHint: "끄면 오답 패널티를 받고 다시 외칠 수 있고, 켜면 한 번 틀린 뒤 해당 라운드에서 잠깁니다.",
     roundsUnit: "라운드",
@@ -102,7 +103,7 @@ const COPY = {
     scoreGuideLabel: "점수 공식",
     scoreGuideTitle: "점수 산식",
     scoreGuideOpen: "점수 공식 보기",
-    scoreGuideBody: "모드별 점수 계산식과 변수 정의를 정확한 수식으로 확인할 수 있습니다.",
+    scoreGuideBody: "모드별 점수 계산식과 재도전 감점, 골든벨 패널티를 정확한 수식으로 확인할 수 있습니다.",
     scoreGuideBaseHeading: "기본 점수표",
     scoreGuideTimedHeading: "시간 제한 라운드",
     scoreGuideGoldenBellHeading: "골든벨",
@@ -278,7 +279,8 @@ const COPY = {
     factorOrderedLabel: "Match factor order",
     factorOrderedHint: "The same factors in a different order will no longer count as correct.",
     factorSingleAttemptLabel: "Limit answer attempts to one try",
-    factorSingleAttemptHint: "After one wrong answer, that player is locked out for the round.",
+    factorSingleAttemptHint:
+      "When on, one wrong answer locks that player for the round. When off, each wrong answer deducts 10% of the current score and they can retry.",
     factorGoldenBellSingleAttemptLabel: "Lock golden bell after one miss",
     factorGoldenBellSingleAttemptHint: "When off, players can buzz again after the penalty. When on, one wrong answer locks that round.",
     roundsUnit: "rounds",
@@ -306,7 +308,8 @@ const COPY = {
     scoreGuideLabel: "Scoring",
     scoreGuideTitle: "Scoring formulas",
     scoreGuideOpen: "View scoring formulas",
-    scoreGuideBody: "Review the exact formulas, variables, and penalties for each mode.",
+    scoreGuideBody:
+      "Review the exact formulas, retry penalties, golden bell penalties, and variable definitions for each mode.",
     scoreGuideBaseHeading: "Base point table",
     scoreGuideTimedHeading: "Timed rounds",
     scoreGuideGoldenBellHeading: "Golden bell",
