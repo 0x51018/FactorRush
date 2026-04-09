@@ -2197,6 +2197,7 @@
 }
 
 .playerPod {
+  position: relative;
   min-height: var(--roster-row-min);
   height: 100%;
   padding: var(--player-pod-padding);
@@ -2208,6 +2209,15 @@
   border-radius: calc(var(--radius-panel) - 0.25rem);
   background: var(--surface-soft);
   box-shadow: var(--card-edge-highlight), var(--shadow-soft);
+  overflow: hidden;
+}
+
+.playerPod::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.34rem;
+  background: transparent;
 }
 
 .playerPod[data-host="true"] {
@@ -2223,6 +2233,41 @@
 
 .playerPod[data-offline="true"] {
   opacity: 0.66;
+}
+
+.playerPod[data-ready-state="host"] {
+  border-color: var(--status-host-border);
+  box-shadow: var(--card-edge-highlight), var(--shadow-soft), inset 0 0 0 1px var(--status-host-bg);
+}
+
+.playerPod[data-ready-state="host"]::before {
+  background: linear-gradient(180deg, var(--status-host-border) 0%, var(--status-host-text) 100%);
+}
+
+.playerPod[data-ready-state="ready"] {
+  border-color: var(--status-ready-border);
+  box-shadow: var(--card-edge-highlight), var(--shadow-soft), inset 0 0 0 1px var(--status-ready-bg);
+}
+
+.playerPod[data-ready-state="ready"]::before {
+  background: linear-gradient(180deg, var(--status-ready-border) 0%, var(--status-ready-text) 100%);
+}
+
+.playerPod[data-ready-state="not-ready"] {
+  border-color: var(--status-caution-border);
+  box-shadow: var(--card-edge-highlight), var(--shadow-soft), inset 0 0 0 1px var(--status-caution-bg);
+}
+
+.playerPod[data-ready-state="not-ready"]::before {
+  background: linear-gradient(180deg, var(--status-caution-border) 0%, var(--status-caution-text) 100%);
+}
+
+.playerPod[data-ready-state="offline"] {
+  border-color: var(--status-neutral-border);
+}
+
+.playerPod[data-ready-state="offline"]::before {
+  background: linear-gradient(180deg, var(--status-neutral-border) 0%, var(--status-neutral-text) 100%);
 }
 
 .playerPod > span {
@@ -2320,19 +2365,43 @@
 }
 
 .podScore small {
-  color: var(--muted);
   font-weight: 700;
   padding: 0.22rem 0.46rem;
+  border: 1px solid var(--status-neutral-border);
   border-radius: var(--radius-pill);
-  background: var(--surface-elevated);
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
   box-shadow: var(--shadow-soft);
 }
 
 .hostBadge {
-  color: var(--accent-warm);
   letter-spacing: 0.04em;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.playerPod[data-ready-state="host"] .podScore small:first-child {
+  border-color: var(--status-host-border);
+  background: var(--status-host-bg);
+  color: var(--status-host-text);
+}
+
+.playerPod[data-ready-state="ready"] .podScore small:first-child {
+  border-color: var(--status-ready-border);
+  background: var(--status-ready-bg);
+  color: var(--status-ready-text);
+}
+
+.playerPod[data-ready-state="not-ready"] .podScore small:first-child {
+  border-color: var(--status-caution-border);
+  background: var(--status-caution-bg);
+  color: var(--status-caution-text);
+}
+
+.playerPod[data-offline="true"] .podScore small:last-child {
+  border-color: var(--status-neutral-border);
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-text);
 }
 
 .miniAction {
@@ -2998,6 +3067,15 @@
   box-shadow: var(--card-edge-highlight), var(--shadow-inset);
 }
 
+.leaderRow::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.3rem;
+  background: var(--status-neutral-border);
+  opacity: 0.5;
+}
+
 .leaderRow[data-me="true"] {
   border-color: rgba(214, 87, 67, 0.18);
   background: var(--surface-card);
@@ -3005,32 +3083,55 @@
 }
 
 .leaderRow[data-state="correct"] {
-  border-color: rgba(34, 141, 95, 0.18);
+  border-color: var(--status-ready-border);
   background:
-    linear-gradient(180deg, rgba(37, 157, 99, 0.07), rgba(37, 157, 99, 0.02)),
+    linear-gradient(180deg, var(--status-ready-bg), transparent),
     var(--surface-card);
+  box-shadow: var(--card-edge-highlight), var(--shadow-inset), inset 0 0 0 1px var(--status-ready-bg);
+}
+
+.leaderRow[data-state="correct"]::before {
+  background: linear-gradient(180deg, var(--status-ready-border) 0%, var(--status-ready-text) 100%);
+  opacity: 1;
 }
 
 .leaderRow[data-state="answering"] {
-  border-color: rgba(214, 87, 67, 0.18);
+  border-color: var(--status-host-border);
   background:
-    linear-gradient(180deg, rgba(214, 87, 67, 0.08), rgba(214, 87, 67, 0.03)),
+    linear-gradient(180deg, var(--status-host-bg), transparent),
     var(--surface-card);
-  box-shadow: var(--shadow-inset), inset 0 0 0 1px rgba(214, 87, 67, 0.08);
+  box-shadow: var(--card-edge-highlight), var(--shadow-inset), inset 0 0 0 1px var(--status-host-bg);
+}
+
+.leaderRow[data-state="answering"]::before {
+  background: linear-gradient(180deg, var(--status-host-border) 0%, var(--status-host-text) 100%);
+  opacity: 1;
 }
 
 .leaderRow[data-state="wrong"] {
-  border-color: rgba(214, 87, 67, 0.16);
+  border-color: var(--status-caution-border);
   background:
-    linear-gradient(180deg, rgba(237, 66, 69, 0.07), rgba(237, 66, 69, 0.02)),
+    linear-gradient(180deg, var(--status-caution-bg), transparent),
     var(--surface-card);
+  box-shadow: var(--card-edge-highlight), var(--shadow-inset), inset 0 0 0 1px var(--status-caution-bg);
+}
+
+.leaderRow[data-state="wrong"]::before {
+  background: linear-gradient(180deg, var(--status-caution-border) 0%, var(--status-caution-text) 100%);
+  opacity: 1;
 }
 
 .leaderRow[data-state="locked"] {
-  border-color: rgba(95, 89, 84, 0.14);
+  border-color: var(--status-neutral-border);
   background:
-    linear-gradient(180deg, rgba(95, 89, 84, 0.06), rgba(95, 89, 84, 0.02)),
+    linear-gradient(180deg, var(--status-neutral-bg), transparent),
     var(--surface-card);
+  box-shadow: var(--card-edge-highlight), var(--shadow-inset), inset 0 0 0 1px var(--status-neutral-bg);
+}
+
+.leaderRow[data-state="locked"]::before {
+  background: linear-gradient(180deg, var(--status-neutral-border) 0%, var(--status-neutral-text) 100%);
+  opacity: 0.82;
 }
 
 .leaderRow span {
@@ -3056,6 +3157,26 @@
 
 .leaderRow strong {
   font-size: 0.94rem;
+}
+
+.leaderRow[data-state="correct"] p,
+.leaderRow[data-state="correct"] strong {
+  color: var(--status-ready-text);
+}
+
+.leaderRow[data-state="answering"] p,
+.leaderRow[data-state="answering"] strong {
+  color: var(--status-host-text);
+}
+
+.leaderRow[data-state="wrong"] p,
+.leaderRow[data-state="wrong"] strong {
+  color: var(--status-caution-text);
+}
+
+.leaderRow[data-state="locked"] p,
+.leaderRow[data-state="locked"] strong {
+  color: var(--status-neutral-text);
 }
 
 .leaderRowMain {
