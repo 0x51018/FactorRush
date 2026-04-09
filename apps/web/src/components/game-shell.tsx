@@ -88,6 +88,7 @@ type BusyState =
 type DensityMode = "normal" | "compact" | "tight";
 type RailMode = "inline" | "peek";
 type LobbyRulesMode = "inline" | "modal";
+type LiveLeaderboardMode = "full" | "condensed";
 type RoundRosterMode = "full" | "compact";
 type RailPanelId = "invite" | "rules" | "chat" | "players";
 type ScrollMode = "fit" | "scroll";
@@ -96,6 +97,7 @@ type ResponsiveRoomLayoutState = {
   density: DensityMode;
   railMode: RailMode;
   lobbyRulesMode: LobbyRulesMode;
+  liveLeaderboardMode: LiveLeaderboardMode;
   roundRosterMode: RoundRosterMode;
   isMobileViewport: boolean;
 };
@@ -104,6 +106,7 @@ const DEFAULT_RESPONSIVE_ROOM_LAYOUT_STATE: ResponsiveRoomLayoutState = {
   density: "normal",
   railMode: "inline",
   lobbyRulesMode: "inline",
+  liveLeaderboardMode: "full",
   roundRosterMode: "full",
   isMobileViewport: false
 };
@@ -1665,7 +1668,8 @@ function RoomExperience({
   const spectatorCount = room.spectators.length;
   const canSeatMorePlayers = room.players.length < room.matchSettings.maxPlayers;
   const isCrowdedLobbyRoster = room.phase === "lobby" && room.players.length >= 5;
-  const { density, railMode, lobbyRulesMode, roundRosterMode, isMobileViewport } = responsiveLayout;
+  const { density, railMode, lobbyRulesMode, liveLeaderboardMode, roundRosterMode, isMobileViewport } =
+    responsiveLayout;
   const liveBoardLabel = locale === "ko" ? "점수 현황" : "Live standings";
   const liveBoardTitle = locale === "ko" ? "리더 보드" : "Leaderboard";
   const lobbyRosterLabel = locale === "ko" ? "로비 공간" : "Lobby space";
@@ -1806,7 +1810,13 @@ function RoomExperience({
     room.phase === "round-active" &&
     effectiveRailMode === "inline" &&
     roundRosterMode === "compact";
-  const canUseRailDrawer = peekRailAvailable;
+  const showCondensedLiveLeaderboard =
+    room.phase === "round-active" &&
+    effectiveRailMode === "inline" &&
+    roundRosterMode === "full" &&
+    liveLeaderboardMode === "condensed";
+  const canUseRailDrawer =
+    peekRailAvailable || (room.phase === "round-active" && roundRosterMode === "compact");
   const isScrollRoom = pageScrollMode === "scroll";
   const roomLayoutStyle = {
     "--peek-rail-dock-top": `${roomLayoutViewportTop}px`,
@@ -2006,13 +2016,15 @@ function RoomExperience({
         : room.phase === "finished"
           ? new Set<RailPanelId>()
           : new Set<RailPanelId>(["players", "chat"]);
+    const canKeepPlayersDrawer =
+      room.phase === "round-active" && roundRosterMode === "compact" && activeRailPanel === "players";
     if (
       !availablePanelIds.has(activeRailPanel) ||
-      effectiveRailMode === "inline"
+      (effectiveRailMode === "inline" && !canKeepPlayersDrawer)
     ) {
       setActiveRailPanel(null);
     }
-  }, [activeRailPanel, effectiveRailMode, room.phase]);
+  }, [activeRailPanel, effectiveRailMode, room.phase, roundRosterMode]);
 
   useEffect(() => {
     if (isSettingsOpen || isMatchSettingsOpen || isRulesOpen || isScoreGuideOpen) {
@@ -2421,20 +2433,20 @@ function RoomExperience({
                   data-me={candidate.id === playerId}
                   data-state={state}
                   key={candidate.id}
-                  title={showCompactLiveRoster ? roundBoardStatus : undefined}
+                  title={showCondensedLiveLeaderboard ? roundBoardStatus : undefined}
                 >
                   <div className={styles.leaderRowMain}>
                     <span className={styles.leaderRank}>{String(index + 1).padStart(2, "0")}</span>
                     <div className={styles.leaderIdentity}>
                       <div className={styles.leaderTitleLine}>
                         <h5 title={candidate.name}>{candidate.name}</h5>
-                        {showCompactLiveRoster && attemptCount > 0 ? (
+                        {showCondensedLiveLeaderboard && attemptCount > 0 ? (
                           <span className={styles.leaderAttemptsBadge}>
                             {locale === "ko" ? `시도 ${attemptCount}` : `T ${attemptCount}`}
                           </span>
                         ) : null}
                       </div>
-                      {!showCompactLiveRoster ? (
+                      {!showCondensedLiveLeaderboard ? (
                         <p>
                           {locale === "ko" ? "시도" : "tries"} {attemptCount} · {roundBoardStatus}
                         </p>
@@ -2442,7 +2454,7 @@ function RoomExperience({
                     </div>
                   </div>
                   <div className={styles.leaderRowScore}>
-                    {showCompactLiveRoster ? (
+                    {showCondensedLiveLeaderboard ? (
                       <span
                         aria-hidden="true"
                         className={styles.leaderStateDot}
@@ -3204,7 +3216,9 @@ function RoomExperience({
               : room.phase === "finished"
                 ? styles.sideRailResults
                 : styles.sideRailLive
-          } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""}`}
+          } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""} ${
+            showCondensedLiveLeaderboard ? styles.sideRailLiveCondensed : ""
+          }`}
         >
           {room.phase === "lobby" ? (
             <>
@@ -3244,7 +3258,7 @@ function RoomExperience({
           </>
           ) : (
             <>
-              {livePlayersPanel}
+              {showCompactLiveRoster ? livePlayersCompactPanel : livePlayersPanel}
               {liveChatPanel}
             </>
           )}
@@ -4106,7 +4120,6 @@ function getResponsiveRoomLayoutState({
       : "inline";
   const shouldCompactRoundRoster =
     phase === "round-active" &&
-    railMode === "inline" &&
     ((playerCount <= 2 &&
       (viewportHeight < 680 ||
         (viewportWidth < 980 && viewportHeight < 820) ||
@@ -4127,6 +4140,26 @@ function getResponsiveRoomLayoutState({
           (viewportWidth < 1340 && viewportHeight < 920) ||
           density === "tight" ||
           viewportScale > 1.06)));
+  const shouldCondenseLiveLeaderboard =
+    phase === "round-active" &&
+    ((playerCount <= 2 &&
+      (viewportWidth < 920 || viewportHeight < 780 || viewportScale > 1.16)) ||
+      (playerCount >= 3 &&
+        playerCount <= 4 &&
+        (viewportWidth < 1040 || viewportHeight < 860 || viewportScale > 1.1)) ||
+      (playerCount >= 5 &&
+        playerCount <= 6 &&
+        (viewportWidth < 1120 ||
+          viewportHeight < 980 ||
+          density !== "normal" ||
+          viewportScale > 1.04)) ||
+      (playerCount >= 7 &&
+        (viewportWidth < 1420 ||
+          viewportHeight < 980 ||
+          density !== "normal" ||
+          viewportScale > 1.01)));
+  const liveLeaderboardMode: LiveLeaderboardMode =
+    shouldCompactRoundRoster || !shouldCondenseLiveLeaderboard ? "full" : "condensed";
   const roundRosterMode: RoundRosterMode =
     shouldCompactRoundRoster ? "compact" : "full";
 
@@ -4134,6 +4167,7 @@ function getResponsiveRoomLayoutState({
     density,
     railMode,
     lobbyRulesMode,
+    liveLeaderboardMode,
     roundRosterMode,
     isMobileViewport
   };

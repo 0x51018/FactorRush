@@ -1018,6 +1018,23 @@
   font-size: 1rem;
 }
 
+.roomLayout[data-density="compact"] .sideRailLiveCondensed .leaderboard {
+  max-height: min(38vh, 320px);
+}
+
+.roomLayout[data-density="tight"] .sideRailLiveCondensed .leaderboard {
+  max-height: min(34vh, 280px);
+  gap: 0.3rem;
+}
+
+.roomLayout[data-density="compact"] .sideRailLiveCondensed .liveChatBlock {
+  min-height: 14.5rem;
+}
+
+.roomLayout[data-density="tight"] .sideRailLiveCondensed .liveChatBlock {
+  min-height: 12.6rem;
+}
+
 .roomLayout[data-density="compact"] .sideRailLiveCompact .leaderboard {
   max-height: min(34vh, 280px);
 }
@@ -1816,6 +1833,50 @@
 
 .sideRailLiveCompact .liveRailBlock {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.sideRailLiveCondensed .leaderboard {
+  max-height: min(42vh, 360px);
+  gap: 0.36rem;
+}
+
+.sideRailLiveCondensed .leaderRow {
+  padding: 0.5rem 0.62rem;
+  gap: 0.46rem;
+}
+
+.sideRailLiveCondensed .leaderRowMain {
+  gap: 0.58rem;
+}
+
+.sideRailLiveCondensed .leaderTitleLine {
+  gap: 0.34rem;
+}
+
+.sideRailLiveCondensed .leaderRow h5 {
+  font-size: 0.76rem;
+}
+
+.sideRailLiveCondensed .leaderRow strong {
+  font-size: 0.9rem;
+}
+
+.sideRailLiveCondensed .leaderRowScore {
+  gap: 0.3rem;
+}
+
+.sideRailLiveCondensed .leaderAttemptsBadge {
+  padding: 0.12rem 0.34rem;
+  font-size: 0.56rem;
+}
+
+.sideRailLiveCondensed .leaderStateDot {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+.sideRailLiveCondensed .liveChatBlock {
+  min-height: 16rem;
 }
 
 .sideRailLiveCompact .leaderboard {
