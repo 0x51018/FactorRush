@@ -200,15 +200,17 @@ const LIVE_RAIL_PROTECTION_SIZING = {
     tight: 0.5
   },
   chatFloor: {
-    comfortable: {
-      normal: 16.375,
-      compact: 14.875,
-      tight: 13.375
+    // Mirrors `.sideRailLiveCondensed .liveChatBlock { min-height: ... }`.
+    condensed: {
+      normal: 16,
+      compact: 14.5,
+      tight: 12.6
     },
-    minimum: {
-      normal: 14.75,
-      compact: 13.25,
-      tight: 11.75
+    // Mirrors `.sideRailLiveCompact .liveChatBlock { min-height: ... }`.
+    compact: {
+      normal: 18,
+      compact: 14,
+      tight: 11.2
     }
   },
   leaderboardChrome: {
@@ -4364,9 +4366,10 @@ function matchesLiveRoundResponsivePredicate(
       return density === predicate.density && viewportWidth < predicate.width;
     case "densityNotNormalAndWidthBelow":
       return density !== "normal" && viewportWidth < predicate.width;
-    default:
-      return false;
   }
+
+  const exhaustivePredicate: never = predicate;
+  return exhaustivePredicate;
 }
 
 function remToPx(rem: number, rootFontSizePx: number) {
@@ -4451,11 +4454,11 @@ function getResponsiveRoomLayoutState({
 
 function getLiveRailChatFloor(
   density: DensityMode,
-  comfort: "comfortable" | "minimum",
+  liveRailMode: "condensed" | "compact",
   rootFontSizePx: number
 ) {
   return remToPx(
-    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[comfort], density),
+    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[liveRailMode], density),
     rootFontSizePx
   );
 }
@@ -4605,10 +4608,10 @@ function getProtectedRoundRailModes({
     spectatorCount,
     rootFontSizePx
   });
-  const comfortableChatFloor = getLiveRailChatFloor(density, "comfortable", rootFontSizePx);
-  const minimumChatFloor = getLiveRailChatFloor(density, "minimum", rootFontSizePx);
+  const condensedChatFloor = getLiveRailChatFloor(density, "condensed", rootFontSizePx);
+  const compactChatFloor = getLiveRailChatFloor(density, "compact", rootFontSizePx);
 
-  if (sideRailHeight - effectiveGap - compactPanelHeight < minimumChatFloor) {
+  if (sideRailHeight - effectiveGap - compactPanelHeight < compactChatFloor) {
     return {
       liveLeaderboardMode: "full",
       roundRosterMode: "compact"
@@ -4617,9 +4620,9 @@ function getProtectedRoundRailModes({
 
   if (
     baseLiveLeaderboardMode === "condensed" ||
-    sideRailHeight - effectiveGap - fullPanelHeight < comfortableChatFloor
+    sideRailHeight - effectiveGap - fullPanelHeight < condensedChatFloor
   ) {
-    if (sideRailHeight - effectiveGap - condensedPanelHeight < minimumChatFloor) {
+    if (sideRailHeight - effectiveGap - condensedPanelHeight < compactChatFloor) {
       return {
         liveLeaderboardMode: "full",
         roundRosterMode: "compact"
