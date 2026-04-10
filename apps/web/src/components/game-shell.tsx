@@ -190,35 +190,42 @@ const LIVE_ROUND_RAIL_RULES = [
 ] as const;
 
 // These sizing presets mirror the current live-rail CSS in game-shell.module.css.
+// Values are stored in rem so browser/default font-size changes scale the protection heuristics
+// along with the rem-based CSS that drives the live rail.
 // Keep this table in sync with the condensed/full leaderboard caps and compact summary card styling.
 const LIVE_RAIL_PROTECTION_SIZING = {
+  railGap: {
+    normal: 0.75,
+    compact: 0.625,
+    tight: 0.5
+  },
   chatFloor: {
     comfortable: {
-      normal: 262,
-      compact: 238,
-      tight: 214
+      normal: 16.375,
+      compact: 14.875,
+      tight: 13.375
     },
     minimum: {
-      normal: 236,
-      compact: 212,
-      tight: 188
+      normal: 14.75,
+      compact: 13.25,
+      tight: 11.75
     }
   },
   leaderboardChrome: {
     headerHeight: {
-      normal: 84,
-      compact: 76,
-      tight: 70
+      normal: 5.25,
+      compact: 4.75,
+      tight: 4.375
     },
     hintHeight: {
-      normal: 38,
-      compact: 34,
-      tight: 30
+      normal: 2.375,
+      compact: 2.125,
+      tight: 1.875
     },
     spectatorBadgeHeight: {
-      normal: 42,
-      compact: 38,
-      tight: 34
+      normal: 2.625,
+      compact: 2.375,
+      tight: 2.125
     }
   },
   leaderboardCaps: {
@@ -228,10 +235,10 @@ const LIVE_RAIL_PROTECTION_SIZING = {
         compact: 0.48,
         tight: 0.48
       },
-      pxCap: {
-        normal: 430,
-        compact: 430,
-        tight: 430
+      remCap: {
+        normal: 26.875,
+        compact: 26.875,
+        tight: 26.875
       }
     },
     condensed: {
@@ -240,49 +247,49 @@ const LIVE_RAIL_PROTECTION_SIZING = {
         compact: 0.38,
         tight: 0.34
       },
-      pxCap: {
-        normal: 360,
-        compact: 320,
-        tight: 280
+      remCap: {
+        normal: 22.5,
+        compact: 20,
+        tight: 17.5
       }
     }
   },
   leaderboardRows: {
     full: {
       rowHeight: {
-        normal: 68,
-        compact: 62,
-        tight: 58
+        normal: 4.25,
+        compact: 3.875,
+        tight: 3.625
       },
       rowGap: {
-        normal: 6,
-        compact: 6,
-        tight: 5
+        normal: 0.375,
+        compact: 0.375,
+        tight: 0.3125
       }
     },
     condensed: {
       rowHeight: {
-        normal: 58,
-        compact: 52,
-        tight: 48
+        normal: 3.625,
+        compact: 3.25,
+        tight: 3
       },
       rowGap: {
-        normal: 5,
-        compact: 5,
-        tight: 4
+        normal: 0.3125,
+        compact: 0.3125,
+        tight: 0.25
       }
     }
   },
   compactSummaryPanel: {
     baseHeight: {
-      normal: 242,
-      compact: 218,
-      tight: 194
+      normal: 15.125,
+      compact: 13.625,
+      tight: 12.125
     },
     spectatorAdjustment: {
-      normal: 32,
-      compact: 28,
-      tight: 24
+      normal: 2,
+      compact: 1.75,
+      tight: 1.5
     }
   }
 } as const;
@@ -2156,6 +2163,8 @@ function RoomExperience({
         if (sideRailElement) {
           const sideRailRect = sideRailElement.getBoundingClientRect();
           const sideRailStyles = window.getComputedStyle(sideRailElement);
+          const rootFontSizePx =
+            Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize || "16") || 16;
           const sideRailGap =
             Number.parseFloat(sideRailStyles.rowGap || sideRailStyles.gap || "0") || 0;
           const protectedModes = getProtectedRoundRailModes({
@@ -2167,7 +2176,8 @@ function RoomExperience({
             sideRailGap,
             sideRailHeight: sideRailRect.height,
             spectatorCount,
-            viewportHeight
+            viewportHeight,
+            rootFontSizePx
           });
           nextLayout.liveLeaderboardMode = protectedModes.liveLeaderboardMode;
           nextLayout.roundRosterMode = protectedModes.roundRosterMode;
@@ -4359,6 +4369,10 @@ function matchesLiveRoundResponsivePredicate(
   }
 }
 
+function remToPx(rem: number, rootFontSizePx: number) {
+  return rem * rootFontSizePx;
+}
+
 function getResponsiveRoomLayoutState({
   phase,
   playerCount,
@@ -4435,8 +4449,15 @@ function getResponsiveRoomLayoutState({
   };
 }
 
-function getLiveRailChatFloor(density: DensityMode, comfort: "comfortable" | "minimum") {
-  return getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[comfort], density);
+function getLiveRailChatFloor(
+  density: DensityMode,
+  comfort: "comfortable" | "minimum",
+  rootFontSizePx: number
+) {
+  return remToPx(
+    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[comfort], density),
+    rootFontSizePx
+  );
 }
 
 function getEstimatedLivePlayersPanelHeight({
@@ -4444,13 +4465,15 @@ function getEstimatedLivePlayersPanelHeight({
   liveLeaderboardMode,
   playerCount,
   spectatorCount,
-  viewportHeight
+  viewportHeight,
+  rootFontSizePx
 }: {
   density: DensityMode;
   liveLeaderboardMode: LiveLeaderboardMode;
   playerCount: number;
   spectatorCount: number;
   viewportHeight: number;
+  rootFontSizePx: number;
 }) {
   const headerHeight = getDensitySizingValue(
     LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.headerHeight,
@@ -4471,15 +4494,21 @@ function getEstimatedLivePlayersPanelHeight({
     LIVE_RAIL_PROTECTION_SIZING.leaderboardCaps[liveLeaderboardMode];
   const leaderboardMaxHeight = Math.min(
     viewportHeight * getDensitySizingValue(leaderboardSizing.vhRatio, density),
-    getDensitySizingValue(leaderboardSizing.pxCap, density)
+    remToPx(getDensitySizingValue(leaderboardSizing.remCap, density), rootFontSizePx)
   );
-  const rowHeight = getDensitySizingValue(
-    LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowHeight,
-    density
+  const rowHeight = remToPx(
+    getDensitySizingValue(
+      LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowHeight,
+      density
+    ),
+    rootFontSizePx
   );
-  const rowGap = getDensitySizingValue(
-    LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowGap,
-    density
+  const rowGap = remToPx(
+    getDensitySizingValue(
+      LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowGap,
+      density
+    ),
+    rootFontSizePx
   );
   const rawLeaderboardHeight =
     playerCount > 0
@@ -4487,29 +4516,34 @@ function getEstimatedLivePlayersPanelHeight({
       : 0;
 
   return (
-    headerHeight +
+    remToPx(headerHeight, rootFontSizePx) +
     Math.min(rawLeaderboardHeight, leaderboardMaxHeight) +
-    hintHeight +
-    spectatorBadgeHeight
+    remToPx(hintHeight, rootFontSizePx) +
+    remToPx(spectatorBadgeHeight, rootFontSizePx)
   );
 }
 
 function getEstimatedCompactLivePlayersPanelHeight({
   density,
-  spectatorCount
+  spectatorCount,
+  rootFontSizePx
 }: {
   density: DensityMode;
   spectatorCount: number;
+  rootFontSizePx: number;
 }) {
-  const baseHeight = getDensitySizingValue(
-    LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.baseHeight,
-    density
+  const baseHeight = remToPx(
+    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.baseHeight, density),
+    rootFontSizePx
   );
   const spectatorAdjustment =
     spectatorCount > 0
-      ? getDensitySizingValue(
-          LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.spectatorAdjustment,
-          density
+      ? remToPx(
+          getDensitySizingValue(
+            LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.spectatorAdjustment,
+            density
+          ),
+          rootFontSizePx
         )
       : 0;
 
@@ -4525,7 +4559,8 @@ function getProtectedRoundRailModes({
   sideRailGap,
   sideRailHeight,
   spectatorCount,
-  viewportHeight
+  viewportHeight,
+  rootFontSizePx
 }: {
   baseLiveLeaderboardMode: LiveLeaderboardMode;
   baseRoundRosterMode: RoundRosterMode;
@@ -4536,6 +4571,7 @@ function getProtectedRoundRailModes({
   sideRailHeight: number;
   spectatorCount: number;
   viewportHeight: number;
+  rootFontSizePx: number;
 }): Pick<ResponsiveRoomLayoutState, "liveLeaderboardMode" | "roundRosterMode"> {
   if (phase !== "round-active" || baseRoundRosterMode === "compact") {
     return {
@@ -4546,28 +4582,31 @@ function getProtectedRoundRailModes({
 
   const effectiveGap = Math.max(
     sideRailGap,
-    density === "tight" ? 8 : density === "compact" ? 10 : 12
+    remToPx(getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.railGap, density), rootFontSizePx)
   );
   const fullPanelHeight = getEstimatedLivePlayersPanelHeight({
     density,
     liveLeaderboardMode: "full",
     playerCount,
     spectatorCount,
-    viewportHeight
+    viewportHeight,
+    rootFontSizePx
   });
   const condensedPanelHeight = getEstimatedLivePlayersPanelHeight({
     density,
     liveLeaderboardMode: "condensed",
     playerCount,
     spectatorCount,
-    viewportHeight
+    viewportHeight,
+    rootFontSizePx
   });
   const compactPanelHeight = getEstimatedCompactLivePlayersPanelHeight({
     density,
-    spectatorCount
+    spectatorCount,
+    rootFontSizePx
   });
-  const comfortableChatFloor = getLiveRailChatFloor(density, "comfortable");
-  const minimumChatFloor = getLiveRailChatFloor(density, "minimum");
+  const comfortableChatFloor = getLiveRailChatFloor(density, "comfortable", rootFontSizePx);
+  const minimumChatFloor = getLiveRailChatFloor(density, "minimum", rootFontSizePx);
 
   if (sideRailHeight - effectiveGap - compactPanelHeight < minimumChatFloor) {
     return {

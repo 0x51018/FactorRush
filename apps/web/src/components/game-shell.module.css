@@ -4181,6 +4181,10 @@
     grid-template-rows: none;
   }
 
+  .roomLayout[data-mobile-viewport="false"][data-rail-mode="peek"] .stageColumn {
+    padding-right: 0;
+  }
+
   .roomLayout[data-mobile-viewport="false"] .sideRail {
     grid-template-columns: 1fr;
   }
