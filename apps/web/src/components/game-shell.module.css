@@ -485,7 +485,13 @@
   gap: calc(1rem * var(--landing-ui-scale));
 }
 
+.page[data-screen="landing"] .brandBlock {
+  width: 100%;
+}
+
 .page[data-screen="landing"] .brandRow {
+  width: 100%;
+  justify-content: space-between;
   gap: calc(0.82rem * var(--landing-ui-scale));
 }
 
