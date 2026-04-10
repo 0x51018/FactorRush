@@ -346,7 +346,6 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   const activeRoomId = room?.roomId ?? initialRoomId ?? null;
   const copy = getCopy(locale);
-  const showAmbientInfo = !room || room.phase === "lobby" || room.phase === "finished";
 
   async function emitWithAck<TResponse>(eventName: string, payload: unknown): Promise<TResponse> {
     const socket = socketRef.current;
@@ -1318,13 +1317,6 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             </div>
           </div>
 
-          {showAmbientInfo ? (
-            <div className={styles.headerTools}>
-              <div className={styles.connectionInfo}>
-                <span>{copy.stackSummary}</span>
-              </div>
-            </div>
-          ) : null}
         </header>
 
         {room ? (
@@ -1345,7 +1337,6 @@ export function GameShell({ initialRoomId }: GameShellProps) {
             now={now}
             roundRemainingSeconds={roundRemainingSeconds}
             progressRatio={progressRatio}
-            showAmbientInfo={showAmbientInfo}
             answerInputRef={answerInputRef}
             onCopyInvite={handleCopyInvite}
             onSettingsDraftChange={handleSettingsDraftChange}
@@ -1722,7 +1713,6 @@ interface RoomExperienceProps {
   now: number;
   roundRemainingSeconds: number;
   progressRatio: number;
-  showAmbientInfo: boolean;
   answerInputRef: RefObject<HTMLInputElement | null>;
   onCopyInvite: () => void;
   onSettingsDraftChange: Dispatch<SetStateAction<LobbySettings>>;
@@ -1760,7 +1750,6 @@ function RoomExperience({
   now,
   roundRemainingSeconds,
   progressRatio,
-  showAmbientInfo,
   answerInputRef,
   onCopyInvite,
   onSettingsDraftChange,

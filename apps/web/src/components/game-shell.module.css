@@ -394,13 +394,6 @@
   min-width: 0;
 }
 
-.headerTools {
-  display: grid;
-  justify-items: end;
-  gap: 0.55rem;
-  padding-right: 0.16rem;
-}
-
 .switchRow {
   display: flex;
   align-items: center;
@@ -459,39 +452,18 @@
   border-color: var(--live-chip-border);
 }
 
-.connectionInfo {
-  display: flex;
-  justify-content: flex-end;
-  max-width: 32rem;
-}
-
-.connectionInfo span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 1.96rem;
-  padding: 0.38rem 0.72rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.62rem;
-  font-family: "IBM Plex Mono", monospace;
-  line-height: 1.16;
-  background: var(--surface-chip);
-  white-space: nowrap;
-  box-shadow: var(--shadow-soft);
-}
-
 .page[data-screen="landing"] .masthead {
   gap: calc(1rem * var(--landing-ui-scale));
 }
 
-.page[data-screen="landing"] .brandRow {
-  gap: calc(0.82rem * var(--landing-ui-scale));
+.page[data-screen="landing"] .brandBlock {
+  width: 100%;
 }
 
-.page[data-screen="landing"] .headerTools {
-  gap: calc(0.52rem * var(--landing-ui-scale));
-  padding-right: calc(0.34rem * var(--landing-ui-scale));
+.page[data-screen="landing"] .brandRow {
+  width: 100%;
+  justify-content: space-between;
+  gap: calc(0.82rem * var(--landing-ui-scale));
 }
 
 .page[data-screen="landing"] .switchRow {
@@ -518,20 +490,6 @@
   min-height: calc(1.88rem * var(--landing-ui-scale));
   padding: calc(0.42rem * var(--landing-ui-scale)) calc(0.72rem * var(--landing-ui-scale));
   font-size: calc(0.62rem * var(--landing-type-scale));
-}
-
-.page[data-screen="landing"] .connectionInfo {
-  width: fit-content;
-  max-width: min(32rem, 100%);
-  justify-self: end;
-  padding-right: calc(0.02rem * var(--landing-ui-scale));
-}
-
-.page[data-screen="landing"] .connectionInfo span {
-  min-height: calc(2.04rem * var(--landing-ui-scale));
-  padding: calc(0.44rem * var(--landing-ui-scale)) calc(0.9rem * var(--landing-ui-scale));
-  font-size: calc(0.62rem * var(--landing-type-scale));
-  line-height: 1.18;
 }
 
 .page[data-screen="landing"] .languageSwitch {
@@ -3761,7 +3719,6 @@
 
 .kicker,
 .connectionBadge,
-.connectionInfo span,
 .languageButton,
 .heroModule span,
 .numberWall,
@@ -4293,28 +4250,12 @@
     gap: 0.34rem;
   }
 
-  .page[data-screen="landing"] .connectionBadge,
-  .page[data-screen="landing"] .connectionInfo {
+  .page[data-screen="landing"] .connectionBadge {
     display: none;
-  }
-
-  .headerTools {
-    width: 100%;
-    justify-items: stretch;
-    gap: 0.42rem;
-    padding-right: 0;
   }
 
   .switchRow {
     justify-content: flex-start;
-  }
-
-  .connectionInfo,
-  .page[data-screen="landing"] .connectionInfo {
-    width: 100%;
-    justify-content: flex-start;
-    justify-self: start;
-    padding-right: 0;
   }
 
   .broadcastLine {
