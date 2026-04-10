@@ -2684,7 +2684,7 @@ function RoomExperience({
                       <div className={styles.leaderTitleLine}>
                         <h5 title={candidate.name}>{candidate.name}</h5>
                         {showCondensedLiveLeaderboard && attemptCount > 0 ? (
-                          <span className={styles.leaderAttemptsBadge}>
+                          <span className={styles.leaderAttemptsBadge} aria-hidden="true">
                             {locale === "ko" ? `시도 ${attemptCount}` : `T ${attemptCount}`}
                           </span>
                         ) : null}
