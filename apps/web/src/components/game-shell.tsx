@@ -2034,7 +2034,7 @@ function RoomExperience({
         resizeObserver.observe(roomLayoutRef.current);
       }
 
-      if (sideRailRef.current) {
+      if (showInlineRail && sideRailRef.current) {
         resizeObserver.observe(sideRailRef.current);
       }
     }
@@ -2045,7 +2045,7 @@ function RoomExperience({
       window.removeEventListener("resize", scheduleResponsiveLayoutSync);
       window.visualViewport?.removeEventListener("resize", scheduleResponsiveLayoutSync);
     };
-  }, [pageScrollMode, room.phase, sortedPlayers.length, spectatorCount]);
+  }, [pageScrollMode, room.phase, showInlineRail, sortedPlayers.length, spectatorCount]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2491,6 +2491,11 @@ function RoomExperience({
               const state = getLeaderboardState(status);
               const roundBoardStatus = getRoundBoardStatus(locale, status);
               const attemptCount = status?.attemptCount ?? 0;
+              const condensedStatusDescription = showCondensedLiveLeaderboard
+                ? locale === "ko"
+                  ? `시도 ${attemptCount}, 현재 상태 ${roundBoardStatus}`
+                  : `${attemptCount} tries, current status ${roundBoardStatus}`
+                : null;
 
               return (
                 <div
@@ -2515,6 +2520,9 @@ function RoomExperience({
                         <p>
                           {locale === "ko" ? "시도" : "tries"} {attemptCount} · {roundBoardStatus}
                         </p>
+                      ) : null}
+                      {condensedStatusDescription ? (
+                        <span className={styles.srOnly}>{condensedStatusDescription}</span>
                       ) : null}
                     </div>
                   </div>

@@ -3815,6 +3815,18 @@
   border-color: rgba(214, 87, 67, 0.24);
 }
 
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .modalCloseButton {
   color: #fff6ef;
   border-color: rgba(255, 74, 0, 0.78);
@@ -4167,6 +4179,10 @@
   .roomLayout[data-mobile-viewport="false"] {
     grid-template-columns: minmax(0, 2.14fr) minmax(var(--room-rail-width), 0.78fr);
     grid-template-rows: none;
+  }
+
+  .roomLayout[data-mobile-viewport="false"] .sideRail {
+    grid-template-columns: 1fr;
   }
 
   .roomLayout[data-mobile-viewport="false"][data-rail-mode="peek"] {
