@@ -88,14 +88,22 @@ type BusyState =
 type DensityMode = "normal" | "compact" | "tight";
 type RailMode = "inline" | "peek";
 type LobbyRulesMode = "inline" | "modal";
+type LiveLeaderboardMode = "full" | "condensed";
 type RoundRosterMode = "full" | "compact";
 type RailPanelId = "invite" | "rules" | "chat" | "players";
 type ScrollMode = "fit" | "scroll";
+type LiveRoundResponsivePredicate =
+  | { kind: "widthBelow"; width: number }
+  | { kind: "widthAndHeightBelow"; width: number; height: number }
+  | { kind: "scaleAndWidthBelow"; scale: number; width: number }
+  | { kind: "densityEqualsAndWidthBelow"; density: DensityMode; width: number }
+  | { kind: "densityNotNormalAndWidthBelow"; width: number };
 
 type ResponsiveRoomLayoutState = {
   density: DensityMode;
   railMode: RailMode;
   lobbyRulesMode: LobbyRulesMode;
+  liveLeaderboardMode: LiveLeaderboardMode;
   roundRosterMode: RoundRosterMode;
   isMobileViewport: boolean;
 };
@@ -104,9 +112,189 @@ const DEFAULT_RESPONSIVE_ROOM_LAYOUT_STATE: ResponsiveRoomLayoutState = {
   density: "normal",
   railMode: "inline",
   lobbyRulesMode: "inline",
+  liveLeaderboardMode: "full",
   roundRosterMode: "full",
   isMobileViewport: false
 };
+
+function areResponsiveRoomLayoutStatesEqual(
+  left: ResponsiveRoomLayoutState,
+  right: ResponsiveRoomLayoutState
+) {
+  return (
+    left.density === right.density &&
+    left.railMode === right.railMode &&
+    left.lobbyRulesMode === right.lobbyRulesMode &&
+    left.liveLeaderboardMode === right.liveLeaderboardMode &&
+    left.roundRosterMode === right.roundRosterMode &&
+    left.isMobileViewport === right.isMobileViewport
+  );
+}
+
+// Live-round rail transitions are tuned per player-count bracket so we can reason about
+// full -> condensed -> compact behavior without a single long breakpoint expression.
+const LIVE_ROUND_RAIL_RULES = [
+  {
+    maxPlayers: 2,
+    compactPredicates: [
+      { kind: "widthBelow", width: 980 },
+      { kind: "widthAndHeightBelow", width: 1180, height: 620 },
+      { kind: "scaleAndWidthBelow", scale: 1.24, width: 1100 }
+    ],
+    condensedPredicates: [
+      { kind: "widthAndHeightBelow", width: 960, height: 660 },
+      { kind: "scaleAndWidthBelow", scale: 1.2, width: 1180 }
+    ]
+  },
+  {
+    maxPlayers: 4,
+    compactPredicates: [
+      { kind: "widthBelow", width: 1080 },
+      { kind: "widthAndHeightBelow", width: 1280, height: 680 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1200 },
+      { kind: "scaleAndWidthBelow", scale: 1.14, width: 1200 }
+    ],
+    condensedPredicates: [
+      { kind: "widthAndHeightBelow", width: 1120, height: 800 },
+      { kind: "scaleAndWidthBelow", scale: 1.14, width: 1280 }
+    ]
+  },
+  {
+    maxPlayers: 6,
+    compactPredicates: [
+      { kind: "widthBelow", width: 980 },
+      { kind: "widthAndHeightBelow", width: 1180, height: 700 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1260 },
+      { kind: "scaleAndWidthBelow", scale: 1.18, width: 1200 }
+    ],
+    condensedPredicates: [
+      { kind: "widthBelow", width: 1120 },
+      { kind: "widthAndHeightBelow", width: 1240, height: 760 },
+      { kind: "densityNotNormalAndWidthBelow", width: 1180 }
+    ]
+  },
+  {
+    maxPlayers: Number.POSITIVE_INFINITY,
+    compactPredicates: [
+      { kind: "widthBelow", width: 1420 },
+      { kind: "widthAndHeightBelow", width: 1600, height: 820 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1500 },
+      { kind: "scaleAndWidthBelow", scale: 1.02, width: 1560 }
+    ],
+    condensedPredicates: [
+      { kind: "widthBelow", width: 1380 },
+      { kind: "widthAndHeightBelow", width: 1560, height: 840 },
+      { kind: "densityNotNormalAndWidthBelow", width: 1460 }
+    ]
+  }
+] as const;
+
+// These sizing presets mirror the current live-rail CSS in game-shell.module.css.
+// Values are stored in rem so browser/default font-size changes scale the protection heuristics
+// along with the rem-based CSS that drives the live rail.
+// Keep this table in sync with the condensed/full leaderboard caps and compact summary card styling.
+const LIVE_RAIL_PROTECTION_SIZING = {
+  railGap: {
+    normal: 0.75,
+    compact: 0.625,
+    tight: 0.5
+  },
+  chatFloor: {
+    // Mirrors `.sideRailLiveCondensed .liveChatBlock { min-height: ... }`.
+    condensed: {
+      normal: 16,
+      compact: 14.5,
+      tight: 12.6
+    },
+    // Mirrors `.sideRailLiveCompact .liveChatBlock { min-height: ... }`.
+    compact: {
+      normal: 18,
+      compact: 14,
+      tight: 11.2
+    }
+  },
+  leaderboardChrome: {
+    headerHeight: {
+      normal: 5.25,
+      compact: 4.75,
+      tight: 4.375
+    },
+    hintHeight: {
+      normal: 2.375,
+      compact: 2.125,
+      tight: 1.875
+    },
+    spectatorBadgeHeight: {
+      normal: 2.625,
+      compact: 2.375,
+      tight: 2.125
+    }
+  },
+  leaderboardCaps: {
+    full: {
+      vhRatio: {
+        normal: 0.48,
+        compact: 0.48,
+        tight: 0.48
+      },
+      remCap: {
+        normal: 26.875,
+        compact: 26.875,
+        tight: 26.875
+      }
+    },
+    condensed: {
+      vhRatio: {
+        normal: 0.42,
+        compact: 0.38,
+        tight: 0.34
+      },
+      remCap: {
+        normal: 22.5,
+        compact: 20,
+        tight: 17.5
+      }
+    }
+  },
+  leaderboardRows: {
+    full: {
+      rowHeight: {
+        normal: 4.25,
+        compact: 3.875,
+        tight: 3.625
+      },
+      rowGap: {
+        normal: 0.375,
+        compact: 0.375,
+        tight: 0.3125
+      }
+    },
+    condensed: {
+      rowHeight: {
+        normal: 3.625,
+        compact: 3.25,
+        tight: 3
+      },
+      rowGap: {
+        normal: 0.3125,
+        compact: 0.3125,
+        tight: 0.25
+      }
+    }
+  },
+  compactSummaryPanel: {
+    baseHeight: {
+      normal: 15.125,
+      compact: 13.625,
+      tight: 12.125
+    },
+    spectatorAdjustment: {
+      normal: 2,
+      compact: 1.75,
+      tight: 1.5
+    }
+  }
+} as const;
 
 type ThemeMode = "light" | "dark";
 const DISPLAY_NAME_KEY = "factorrush:last-name";
@@ -1622,6 +1810,7 @@ function RoomExperience({
   const lobbyChatListRef = useRef<HTMLDivElement | null>(null);
   const playerNameInputRef = useRef<HTMLInputElement | null>(null);
   const roomLayoutRef = useRef<HTMLElement | null>(null);
+  const sideRailRef = useRef<HTMLElement | null>(null);
   const playerNameComposingRef = useRef(false);
   const commitPlayerNameDraft = (value: string) => {
     setPlayerNameDraft(sanitizePlayerName(value));
@@ -1665,7 +1854,8 @@ function RoomExperience({
   const spectatorCount = room.spectators.length;
   const canSeatMorePlayers = room.players.length < room.matchSettings.maxPlayers;
   const isCrowdedLobbyRoster = room.phase === "lobby" && room.players.length >= 5;
-  const { density, railMode, lobbyRulesMode, roundRosterMode, isMobileViewport } = responsiveLayout;
+  const { density, railMode, lobbyRulesMode, liveLeaderboardMode, roundRosterMode, isMobileViewport } =
+    responsiveLayout;
   const liveBoardLabel = locale === "ko" ? "점수 현황" : "Live standings";
   const liveBoardTitle = locale === "ko" ? "리더 보드" : "Leaderboard";
   const lobbyRosterLabel = locale === "ko" ? "로비 공간" : "Lobby space";
@@ -1806,6 +1996,11 @@ function RoomExperience({
     room.phase === "round-active" &&
     effectiveRailMode === "inline" &&
     roundRosterMode === "compact";
+  const showCondensedLiveLeaderboard =
+    room.phase === "round-active" &&
+    effectiveRailMode === "inline" &&
+    roundRosterMode === "full" &&
+    liveLeaderboardMode === "condensed";
   const canUseRailDrawer =
     peekRailAvailable || (room.phase === "round-active" && roundRosterMode === "compact");
   const isScrollRoom = pageScrollMode === "scroll";
@@ -1943,6 +2138,9 @@ function RoomExperience({
   }, [currentMember?.name]);
 
   useEffect(() => {
+    let frameId = 0;
+    let resizeObserver: ResizeObserver | null = null;
+
     const syncResponsiveLayout = () => {
       if (typeof window === "undefined") {
         return;
@@ -1951,27 +2149,78 @@ function RoomExperience({
       const viewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth);
       const viewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
       const viewportScale = window.visualViewport?.scale ?? 1;
+      const nextLayout = getResponsiveRoomLayoutState({
+        phase: room.phase,
+        playerCount: sortedPlayers.length,
+        viewportWidth,
+        viewportHeight,
+        viewportScale
+      });
+      const effectiveNextRailMode: RailMode =
+        pageScrollMode === "scroll" ? "inline" : nextLayout.railMode;
 
-      setResponsiveLayout(
-        getResponsiveRoomLayoutState({
-          phase: room.phase,
-          playerCount: sortedPlayers.length,
-          viewportWidth,
-          viewportHeight,
-          viewportScale
-        })
+      if (room.phase === "round-active" && pageScrollMode === "fit" && effectiveNextRailMode === "inline") {
+        const sideRailElement = sideRailRef.current;
+
+        if (sideRailElement) {
+          const sideRailRect = sideRailElement.getBoundingClientRect();
+          const sideRailStyles = window.getComputedStyle(sideRailElement);
+          const rootFontSizePx =
+            Number.parseFloat(window.getComputedStyle(document.documentElement).fontSize || "16") || 16;
+          const sideRailGap =
+            Number.parseFloat(sideRailStyles.rowGap || sideRailStyles.gap || "0") || 0;
+          const protectedModes = getProtectedRoundRailModes({
+            baseLiveLeaderboardMode: nextLayout.liveLeaderboardMode,
+            baseRoundRosterMode: nextLayout.roundRosterMode,
+            density: nextLayout.density,
+            phase: room.phase,
+            playerCount: sortedPlayers.length,
+            sideRailGap,
+            sideRailHeight: sideRailRect.height,
+            spectatorCount,
+            viewportHeight,
+            rootFontSizePx
+          });
+          nextLayout.liveLeaderboardMode = protectedModes.liveLeaderboardMode;
+          nextLayout.roundRosterMode = protectedModes.roundRosterMode;
+        }
+      }
+
+      setResponsiveLayout((previous) =>
+        areResponsiveRoomLayoutStatesEqual(previous, nextLayout) ? previous : nextLayout
       );
     };
 
-    syncResponsiveLayout();
-    window.addEventListener("resize", syncResponsiveLayout);
-    window.visualViewport?.addEventListener("resize", syncResponsiveLayout);
+    const scheduleResponsiveLayoutSync = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(syncResponsiveLayout);
+    };
+
+    scheduleResponsiveLayoutSync();
+    window.addEventListener("resize", scheduleResponsiveLayoutSync);
+    window.visualViewport?.addEventListener("resize", scheduleResponsiveLayoutSync);
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        scheduleResponsiveLayoutSync();
+      });
+
+      if (roomLayoutRef.current) {
+        resizeObserver.observe(roomLayoutRef.current);
+      }
+
+      if (showInlineRail && sideRailRef.current) {
+        resizeObserver.observe(sideRailRef.current);
+      }
+    }
 
     return () => {
-      window.removeEventListener("resize", syncResponsiveLayout);
-      window.visualViewport?.removeEventListener("resize", syncResponsiveLayout);
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleResponsiveLayoutSync);
+      window.visualViewport?.removeEventListener("resize", scheduleResponsiveLayoutSync);
     };
-  }, [room.phase, sortedPlayers.length]);
+  }, [pageScrollMode, room.phase, showInlineRail, sortedPlayers.length, spectatorCount]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -2009,7 +2258,6 @@ function RoomExperience({
           : new Set<RailPanelId>(["players", "chat"]);
     const canKeepPlayersDrawer =
       room.phase === "round-active" && roundRosterMode === "compact" && activeRailPanel === "players";
-
     if (
       !availablePanelIds.has(activeRailPanel) ||
       (effectiveRailMode === "inline" && !canKeepPlayersDrawer)
@@ -2416,6 +2664,13 @@ function RoomExperience({
             {sortedPlayers.map((candidate, index) => {
               const status = room.round?.playerStatuses.find((entry) => entry.playerId === candidate.id);
               const state = getLeaderboardState(status);
+              const roundBoardStatus = getRoundBoardStatus(locale, status);
+              const attemptCount = status?.attemptCount ?? 0;
+              const condensedStatusDescription = showCondensedLiveLeaderboard
+                ? locale === "ko"
+                  ? `시도 ${attemptCount}, 현재 상태 ${roundBoardStatus}`
+                  : `${attemptCount} tries, current status ${roundBoardStatus}`
+                : null;
 
               return (
                 <div
@@ -2423,18 +2678,37 @@ function RoomExperience({
                   data-me={candidate.id === playerId}
                   data-state={state}
                   key={candidate.id}
+                  title={showCondensedLiveLeaderboard ? roundBoardStatus : undefined}
                 >
                   <div className={styles.leaderRowMain}>
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                    <div>
-                      <h5>{candidate.name}</h5>
-                      <p>
-                        {locale === "ko" ? "시도" : "tries"} {status?.attemptCount ?? 0} ·{" "}
-                        {getRoundBoardStatus(locale, status)}
-                      </p>
+                    <span className={styles.leaderRank}>{String(index + 1).padStart(2, "0")}</span>
+                    <div className={styles.leaderIdentity}>
+                      <div className={styles.leaderTitleLine}>
+                        <h5 title={candidate.name}>{candidate.name}</h5>
+                        {showCondensedLiveLeaderboard && attemptCount > 0 ? (
+                          <span className={styles.leaderAttemptsBadge} aria-hidden="true">
+                            {locale === "ko" ? `시도 ${attemptCount}` : `T ${attemptCount}`}
+                          </span>
+                        ) : null}
+                      </div>
+                      {!showCondensedLiveLeaderboard ? (
+                        <p>
+                          {locale === "ko" ? "시도" : "tries"} {attemptCount} · {roundBoardStatus}
+                        </p>
+                      ) : null}
+                      {condensedStatusDescription ? (
+                        <span className={styles.srOnly}>{condensedStatusDescription}</span>
+                      ) : null}
                     </div>
                   </div>
                   <div className={styles.leaderRowScore}>
+                    {showCondensedLiveLeaderboard ? (
+                      <span
+                        aria-hidden="true"
+                        className={styles.leaderStateDot}
+                        title={roundBoardStatus}
+                      />
+                    ) : null}
                     <strong>{candidate.score}</strong>
                   </div>
 
@@ -2642,6 +2916,7 @@ function RoomExperience({
       data-overlay-active={overlayActive}
       data-phase={room.phase}
       data-crowded-lobby={isCrowdedLobbyRoster ? "true" : undefined}
+      data-mobile-viewport={isMobileViewport ? "true" : "false"}
       data-rail-mode={effectiveRailMode}
       data-scroll-mode={pageScrollMode}
       data-round-roster-mode={room.phase === "round-active" ? roundRosterMode : undefined}
@@ -3190,7 +3465,10 @@ function RoomExperience({
               : room.phase === "finished"
                 ? styles.sideRailResults
                 : styles.sideRailLive
-          } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""}`}
+          } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""} ${
+            showCondensedLiveLeaderboard ? styles.sideRailLiveCondensed : ""
+          }`}
+          ref={sideRailRef}
         >
           {room.phase === "lobby" ? (
             <>
@@ -4050,6 +4328,54 @@ function getNotReadyBadge(locale: Locale) {
   return locale === "ko" ? "미준비" : "not ready";
 }
 
+function getDensitySizingValue<T>(values: Record<DensityMode, T>, density: DensityMode) {
+  return values[density];
+}
+
+function getLiveRoundRailRule(playerCount: number): (typeof LIVE_ROUND_RAIL_RULES)[number] {
+  const matchedRule = LIVE_ROUND_RAIL_RULES.find((rule) => playerCount <= rule.maxPlayers);
+  if (matchedRule) {
+    return matchedRule;
+  }
+
+  return LIVE_ROUND_RAIL_RULES[LIVE_ROUND_RAIL_RULES.length - 1]!;
+}
+
+function matchesLiveRoundResponsivePredicate(
+  predicate: LiveRoundResponsivePredicate,
+  {
+    density,
+    viewportHeight,
+    viewportScale,
+    viewportWidth
+  }: {
+    density: DensityMode;
+    viewportHeight: number;
+    viewportScale: number;
+    viewportWidth: number;
+  }
+) {
+  switch (predicate.kind) {
+    case "widthBelow":
+      return viewportWidth < predicate.width;
+    case "widthAndHeightBelow":
+      return viewportWidth < predicate.width && viewportHeight < predicate.height;
+    case "scaleAndWidthBelow":
+      return viewportScale > predicate.scale && viewportWidth < predicate.width;
+    case "densityEqualsAndWidthBelow":
+      return density === predicate.density && viewportWidth < predicate.width;
+    case "densityNotNormalAndWidthBelow":
+      return density !== "normal" && viewportWidth < predicate.width;
+  }
+
+  const exhaustivePredicate: never = predicate;
+  return exhaustivePredicate;
+}
+
+function remToPx(rem: number, rootFontSizePx: number) {
+  return rem * rootFontSizePx;
+}
+
 function getResponsiveRoomLayoutState({
   phase,
   playerCount,
@@ -4090,28 +4416,29 @@ function getResponsiveRoomLayoutState({
     )
       ? "modal"
       : "inline";
+  const liveRoundRailRule = getLiveRoundRailRule(playerCount);
   const shouldCompactRoundRoster =
     phase === "round-active" &&
-    ((playerCount <= 2 &&
-      (viewportHeight < 700 || viewportWidth < 980 || viewportScale > 1.24)) ||
-      (playerCount >= 3 &&
-        playerCount <= 4 &&
-        (viewportHeight < 750 ||
-          viewportWidth < 1080 ||
-          (density === "tight" && viewportHeight < 820) ||
-          viewportScale > 1.14)) ||
-      (playerCount >= 5 &&
-        playerCount <= 6 &&
-        (viewportHeight < 710 ||
-          viewportWidth < 980 ||
-          (density === "tight" && viewportHeight < 780) ||
-          viewportScale > 1.18)) ||
-      (playerCount >= 7 &&
-        (viewportHeight < 860 ||
-          density === "tight" ||
-          viewportWidth < 1420 ||
-          viewportHeight < 920 ||
-          viewportScale > 1.02)));
+    liveRoundRailRule.compactPredicates.some((predicate) =>
+      matchesLiveRoundResponsivePredicate(predicate, {
+        density,
+        viewportHeight,
+        viewportScale,
+        viewportWidth
+      })
+    );
+  const shouldCondenseLiveLeaderboard =
+    phase === "round-active" &&
+    liveRoundRailRule.condensedPredicates.some((predicate) =>
+      matchesLiveRoundResponsivePredicate(predicate, {
+        density,
+        viewportHeight,
+        viewportScale,
+        viewportWidth
+      })
+    );
+  const liveLeaderboardMode: LiveLeaderboardMode =
+    shouldCompactRoundRoster || !shouldCondenseLiveLeaderboard ? "full" : "condensed";
   const roundRosterMode: RoundRosterMode =
     shouldCompactRoundRoster ? "compact" : "full";
 
@@ -4119,8 +4446,198 @@ function getResponsiveRoomLayoutState({
     density,
     railMode,
     lobbyRulesMode,
+    liveLeaderboardMode,
     roundRosterMode,
     isMobileViewport
+  };
+}
+
+function getLiveRailChatFloor(
+  density: DensityMode,
+  liveRailMode: "condensed" | "compact",
+  rootFontSizePx: number
+) {
+  return remToPx(
+    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[liveRailMode], density),
+    rootFontSizePx
+  );
+}
+
+function getEstimatedLivePlayersPanelHeight({
+  density,
+  liveLeaderboardMode,
+  playerCount,
+  spectatorCount,
+  viewportHeight,
+  rootFontSizePx
+}: {
+  density: DensityMode;
+  liveLeaderboardMode: LiveLeaderboardMode;
+  playerCount: number;
+  spectatorCount: number;
+  viewportHeight: number;
+  rootFontSizePx: number;
+}) {
+  const headerHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.headerHeight,
+    density
+  );
+  const hintHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.hintHeight,
+    density
+  );
+  const spectatorBadgeHeight =
+    spectatorCount > 0
+      ? getDensitySizingValue(
+          LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.spectatorBadgeHeight,
+          density
+        )
+      : 0;
+  const leaderboardSizing =
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardCaps[liveLeaderboardMode];
+  const leaderboardMaxHeight = Math.min(
+    viewportHeight * getDensitySizingValue(leaderboardSizing.vhRatio, density),
+    remToPx(getDensitySizingValue(leaderboardSizing.remCap, density), rootFontSizePx)
+  );
+  const rowHeight = remToPx(
+    getDensitySizingValue(
+      LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowHeight,
+      density
+    ),
+    rootFontSizePx
+  );
+  const rowGap = remToPx(
+    getDensitySizingValue(
+      LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowGap,
+      density
+    ),
+    rootFontSizePx
+  );
+  const rawLeaderboardHeight =
+    playerCount > 0
+      ? playerCount * rowHeight + Math.max(0, playerCount - 1) * rowGap
+      : 0;
+
+  return (
+    remToPx(headerHeight, rootFontSizePx) +
+    Math.min(rawLeaderboardHeight, leaderboardMaxHeight) +
+    remToPx(hintHeight, rootFontSizePx) +
+    remToPx(spectatorBadgeHeight, rootFontSizePx)
+  );
+}
+
+function getEstimatedCompactLivePlayersPanelHeight({
+  density,
+  spectatorCount,
+  rootFontSizePx
+}: {
+  density: DensityMode;
+  spectatorCount: number;
+  rootFontSizePx: number;
+}) {
+  const baseHeight = remToPx(
+    getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.baseHeight, density),
+    rootFontSizePx
+  );
+  const spectatorAdjustment =
+    spectatorCount > 0
+      ? remToPx(
+          getDensitySizingValue(
+            LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.spectatorAdjustment,
+            density
+          ),
+          rootFontSizePx
+        )
+      : 0;
+
+  return baseHeight + spectatorAdjustment;
+}
+
+function getProtectedRoundRailModes({
+  baseLiveLeaderboardMode,
+  baseRoundRosterMode,
+  density,
+  phase,
+  playerCount,
+  sideRailGap,
+  sideRailHeight,
+  spectatorCount,
+  viewportHeight,
+  rootFontSizePx
+}: {
+  baseLiveLeaderboardMode: LiveLeaderboardMode;
+  baseRoundRosterMode: RoundRosterMode;
+  density: DensityMode;
+  phase: RoomSnapshot["phase"];
+  playerCount: number;
+  sideRailGap: number;
+  sideRailHeight: number;
+  spectatorCount: number;
+  viewportHeight: number;
+  rootFontSizePx: number;
+}): Pick<ResponsiveRoomLayoutState, "liveLeaderboardMode" | "roundRosterMode"> {
+  if (phase !== "round-active" || baseRoundRosterMode === "compact") {
+    return {
+      liveLeaderboardMode: "full",
+      roundRosterMode: baseRoundRosterMode
+    };
+  }
+
+  const effectiveGap = Math.max(
+    sideRailGap,
+    remToPx(getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.railGap, density), rootFontSizePx)
+  );
+  const fullPanelHeight = getEstimatedLivePlayersPanelHeight({
+    density,
+    liveLeaderboardMode: "full",
+    playerCount,
+    spectatorCount,
+    viewportHeight,
+    rootFontSizePx
+  });
+  const condensedPanelHeight = getEstimatedLivePlayersPanelHeight({
+    density,
+    liveLeaderboardMode: "condensed",
+    playerCount,
+    spectatorCount,
+    viewportHeight,
+    rootFontSizePx
+  });
+  const compactPanelHeight = getEstimatedCompactLivePlayersPanelHeight({
+    density,
+    spectatorCount,
+    rootFontSizePx
+  });
+  const condensedChatFloor = getLiveRailChatFloor(density, "condensed", rootFontSizePx);
+  const compactChatFloor = getLiveRailChatFloor(density, "compact", rootFontSizePx);
+
+  if (sideRailHeight - effectiveGap - compactPanelHeight < compactChatFloor) {
+    return {
+      liveLeaderboardMode: "full",
+      roundRosterMode: "compact"
+    };
+  }
+
+  if (
+    baseLiveLeaderboardMode === "condensed" ||
+    sideRailHeight - effectiveGap - fullPanelHeight < condensedChatFloor
+  ) {
+    if (sideRailHeight - effectiveGap - condensedPanelHeight < compactChatFloor) {
+      return {
+        liveLeaderboardMode: "full",
+        roundRosterMode: "compact"
+      };
+    }
+
+    return {
+      liveLeaderboardMode: "condensed",
+      roundRosterMode: "full"
+    };
+  }
+
+  return {
+    liveLeaderboardMode: "full",
+    roundRosterMode: "full"
   };
 }
 
@@ -4140,11 +4657,10 @@ function getPageScrollMode(
     if (
       horizontalOverflow ||
       verticalOverflow ||
-      viewportScale > 1.42 ||
-      viewportWidth < 920 ||
-      viewportHeight < 610 ||
-      (viewportWidth < 1100 && viewportHeight < 690) ||
-      (viewportScale > 1.24 && viewportWidth < 1240)
+      viewportScale > 1.72 ||
+      viewportWidth < 820 ||
+      viewportHeight < 430 ||
+      (viewportWidth < 900 && viewportHeight < 450)
     ) {
       return "scroll";
     }
