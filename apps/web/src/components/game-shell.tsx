@@ -2004,7 +2004,8 @@ function RoomExperience({
             playerCount: sortedPlayers.length,
             sideRailGap,
             sideRailHeight: sideRailRect.height,
-            spectatorCount
+            spectatorCount,
+            viewportHeight
           });
           nextLayout.liveLeaderboardMode = protectedModes.liveLeaderboardMode;
           nextLayout.roundRosterMode = protectedModes.roundRosterMode;
@@ -4277,12 +4278,14 @@ function getEstimatedLivePlayersPanelHeight({
   density,
   liveLeaderboardMode,
   playerCount,
-  spectatorCount
+  spectatorCount,
+  viewportHeight
 }: {
   density: DensityMode;
   liveLeaderboardMode: LiveLeaderboardMode;
   playerCount: number;
   spectatorCount: number;
+  viewportHeight: number;
 }) {
   const headerHeight =
     density === "tight" ? 70 : density === "compact" ? 76 : 84;
@@ -4299,11 +4302,11 @@ function getEstimatedLivePlayersPanelHeight({
   const leaderboardMaxHeight =
     liveLeaderboardMode === "condensed"
       ? density === "tight"
-        ? 280
+        ? Math.min(viewportHeight * 0.34, 280)
         : density === "compact"
-          ? 320
-          : 360
-      : 430;
+          ? Math.min(viewportHeight * 0.38, 320)
+          : Math.min(viewportHeight * 0.42, 360)
+      : Math.min(viewportHeight * 0.48, 430);
   const rowHeight =
     liveLeaderboardMode === "condensed"
       ? density === "tight"
@@ -4366,7 +4369,8 @@ function getProtectedRoundRailModes({
   playerCount,
   sideRailGap,
   sideRailHeight,
-  spectatorCount
+  spectatorCount,
+  viewportHeight
 }: {
   baseLiveLeaderboardMode: LiveLeaderboardMode;
   baseRoundRosterMode: RoundRosterMode;
@@ -4376,6 +4380,7 @@ function getProtectedRoundRailModes({
   sideRailGap: number;
   sideRailHeight: number;
   spectatorCount: number;
+  viewportHeight: number;
 }): Pick<ResponsiveRoomLayoutState, "liveLeaderboardMode" | "roundRosterMode"> {
   if (phase !== "round-active" || baseRoundRosterMode === "compact") {
     return {
@@ -4392,13 +4397,15 @@ function getProtectedRoundRailModes({
     density,
     liveLeaderboardMode: "full",
     playerCount,
-    spectatorCount
+    spectatorCount,
+    viewportHeight
   });
   const condensedPanelHeight = getEstimatedLivePlayersPanelHeight({
     density,
     liveLeaderboardMode: "condensed",
     playerCount,
-    spectatorCount
+    spectatorCount,
+    viewportHeight
   });
   const compactPanelHeight = getEstimatedCompactLivePlayersPanelHeight({
     density,
@@ -4451,12 +4458,12 @@ function getPageScrollMode(
 
   if (phase === "round-active" || phase === "round-ended") {
     if (
+      horizontalOverflow ||
+      verticalOverflow ||
       viewportScale > 1.72 ||
       viewportWidth < 820 ||
       viewportHeight < 430 ||
-      (viewportWidth < 900 && viewportHeight < 450) ||
-      (horizontalOverflow && viewportWidth < 960) ||
-      (verticalOverflow && viewportHeight < 430)
+      (viewportWidth < 900 && viewportHeight < 450)
     ) {
       return "scroll";
     }
