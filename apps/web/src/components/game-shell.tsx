@@ -111,6 +111,20 @@ const DEFAULT_RESPONSIVE_ROOM_LAYOUT_STATE: ResponsiveRoomLayoutState = {
   isMobileViewport: false
 };
 
+function areResponsiveRoomLayoutStatesEqual(
+  left: ResponsiveRoomLayoutState,
+  right: ResponsiveRoomLayoutState
+) {
+  return (
+    left.density === right.density &&
+    left.railMode === right.railMode &&
+    left.lobbyRulesMode === right.lobbyRulesMode &&
+    left.liveLeaderboardMode === right.liveLeaderboardMode &&
+    left.roundRosterMode === right.roundRosterMode &&
+    left.isMobileViewport === right.isMobileViewport
+  );
+}
+
 type ThemeMode = "light" | "dark";
 const DISPLAY_NAME_KEY = "factorrush:last-name";
 const ROOM_SESSION_PREFIX = "factorrush:room:";
@@ -1625,6 +1639,7 @@ function RoomExperience({
   const lobbyChatListRef = useRef<HTMLDivElement | null>(null);
   const playerNameInputRef = useRef<HTMLInputElement | null>(null);
   const roomLayoutRef = useRef<HTMLElement | null>(null);
+  const sideRailRef = useRef<HTMLElement | null>(null);
   const playerNameComposingRef = useRef(false);
   const commitPlayerNameDraft = (value: string) => {
     setPlayerNameDraft(sanitizePlayerName(value));
@@ -1952,6 +1967,9 @@ function RoomExperience({
   }, [currentMember?.name]);
 
   useEffect(() => {
+    let frameId = 0;
+    let resizeObserver: ResizeObserver | null = null;
+
     const syncResponsiveLayout = () => {
       if (typeof window === "undefined") {
         return;
@@ -1960,27 +1978,74 @@ function RoomExperience({
       const viewportWidth = Math.round(window.visualViewport?.width ?? window.innerWidth);
       const viewportHeight = Math.round(window.visualViewport?.height ?? window.innerHeight);
       const viewportScale = window.visualViewport?.scale ?? 1;
+      const nextLayout = getResponsiveRoomLayoutState({
+        phase: room.phase,
+        playerCount: sortedPlayers.length,
+        viewportWidth,
+        viewportHeight,
+        viewportScale
+      });
+      const effectiveNextRailMode: RailMode =
+        pageScrollMode === "scroll" ? "inline" : nextLayout.railMode;
 
-      setResponsiveLayout(
-        getResponsiveRoomLayoutState({
-          phase: room.phase,
-          playerCount: sortedPlayers.length,
-          viewportWidth,
-          viewportHeight,
-          viewportScale
-        })
+      if (room.phase === "round-active" && pageScrollMode === "fit" && effectiveNextRailMode === "inline") {
+        const sideRailElement = sideRailRef.current;
+
+        if (sideRailElement) {
+          const sideRailRect = sideRailElement.getBoundingClientRect();
+          const sideRailStyles = window.getComputedStyle(sideRailElement);
+          const sideRailGap =
+            Number.parseFloat(sideRailStyles.rowGap || sideRailStyles.gap || "0") || 0;
+          const protectedModes = getProtectedRoundRailModes({
+            baseLiveLeaderboardMode: nextLayout.liveLeaderboardMode,
+            baseRoundRosterMode: nextLayout.roundRosterMode,
+            density: nextLayout.density,
+            phase: room.phase,
+            playerCount: sortedPlayers.length,
+            sideRailGap,
+            sideRailHeight: sideRailRect.height,
+            spectatorCount
+          });
+          nextLayout.liveLeaderboardMode = protectedModes.liveLeaderboardMode;
+          nextLayout.roundRosterMode = protectedModes.roundRosterMode;
+        }
+      }
+
+      setResponsiveLayout((previous) =>
+        areResponsiveRoomLayoutStatesEqual(previous, nextLayout) ? previous : nextLayout
       );
     };
 
-    syncResponsiveLayout();
-    window.addEventListener("resize", syncResponsiveLayout);
-    window.visualViewport?.addEventListener("resize", syncResponsiveLayout);
+    const scheduleResponsiveLayoutSync = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(syncResponsiveLayout);
+    };
+
+    scheduleResponsiveLayoutSync();
+    window.addEventListener("resize", scheduleResponsiveLayoutSync);
+    window.visualViewport?.addEventListener("resize", scheduleResponsiveLayoutSync);
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        scheduleResponsiveLayoutSync();
+      });
+
+      if (roomLayoutRef.current) {
+        resizeObserver.observe(roomLayoutRef.current);
+      }
+
+      if (sideRailRef.current) {
+        resizeObserver.observe(sideRailRef.current);
+      }
+    }
 
     return () => {
-      window.removeEventListener("resize", syncResponsiveLayout);
-      window.visualViewport?.removeEventListener("resize", syncResponsiveLayout);
+      window.cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", scheduleResponsiveLayoutSync);
+      window.visualViewport?.removeEventListener("resize", scheduleResponsiveLayoutSync);
     };
-  }, [room.phase, sortedPlayers.length]);
+  }, [pageScrollMode, room.phase, sortedPlayers.length, spectatorCount]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -3220,6 +3285,7 @@ function RoomExperience({
           } ${showCompactLiveRoster ? styles.sideRailLiveCompact : ""} ${
             showCondensedLiveLeaderboard ? styles.sideRailLiveCondensed : ""
           }`}
+          ref={sideRailRef}
         >
           {room.phase === "lobby" ? (
             <>
@@ -4122,43 +4188,44 @@ function getResponsiveRoomLayoutState({
   const shouldCompactRoundRoster =
     phase === "round-active" &&
     ((playerCount <= 2 &&
-      (viewportHeight < 680 ||
-        (viewportWidth < 980 && viewportHeight < 820) ||
-        viewportScale > 1.28)) ||
+      (viewportWidth < 980 ||
+        (viewportHeight < 620 && viewportWidth < 1180) ||
+        (viewportScale > 1.24 && viewportWidth < 1100))) ||
       (playerCount >= 3 &&
         playerCount <= 4 &&
-        (viewportHeight < 720 ||
-          (viewportWidth < 1080 && viewportHeight < 860) ||
-          viewportScale > 1.18)) ||
+        (viewportWidth < 1080 ||
+          (viewportHeight < 680 && viewportWidth < 1280) ||
+          (density === "tight" && viewportWidth < 1200) ||
+          (viewportScale > 1.14 && viewportWidth < 1200))) ||
       (playerCount >= 5 &&
         playerCount <= 6 &&
-        (viewportHeight < 760 ||
-          (viewportWidth < 1220 && viewportHeight < 900) ||
-          (density === "tight" && viewportHeight < 820) ||
-          viewportScale > 1.12)) ||
+        (viewportWidth < 980 ||
+          (viewportHeight < 700 && viewportWidth < 1180) ||
+          (density === "tight" && viewportWidth < 1260) ||
+          (viewportScale > 1.18 && viewportWidth < 1200))) ||
       (playerCount >= 7 &&
-        (viewportHeight < 800 ||
-          (viewportWidth < 1340 && viewportHeight < 920) ||
-          density === "tight" ||
-          viewportScale > 1.06)));
+        (viewportWidth < 1420 ||
+          (viewportHeight < 820 && viewportWidth < 1600) ||
+          (density === "tight" && viewportWidth < 1500) ||
+          (viewportScale > 1.02 && viewportWidth < 1560))));
   const shouldCondenseLiveLeaderboard =
     phase === "round-active" &&
     ((playerCount <= 2 &&
-      (viewportWidth < 920 || viewportHeight < 780 || viewportScale > 1.16)) ||
+      ((viewportWidth < 960 && viewportHeight < 660) ||
+        (viewportScale > 1.2 && viewportWidth < 1180))) ||
       (playerCount >= 3 &&
         playerCount <= 4 &&
-        (viewportWidth < 1040 || viewportHeight < 860 || viewportScale > 1.1)) ||
+        ((viewportWidth < 1120 && viewportHeight < 800) ||
+          (viewportScale > 1.14 && viewportWidth < 1280))) ||
       (playerCount >= 5 &&
         playerCount <= 6 &&
         (viewportWidth < 1120 ||
-          viewportHeight < 980 ||
-          density !== "normal" ||
-          viewportScale > 1.04)) ||
+          (viewportHeight < 760 && viewportWidth < 1240) ||
+          (density !== "normal" && viewportWidth < 1180))) ||
       (playerCount >= 7 &&
-        (viewportWidth < 1420 ||
-          viewportHeight < 980 ||
-          density !== "normal" ||
-          viewportScale > 1.01)));
+        (viewportWidth < 1380 ||
+          (viewportHeight < 840 && viewportWidth < 1560) ||
+          (density !== "normal" && viewportWidth < 1460))));
   const liveLeaderboardMode: LiveLeaderboardMode =
     shouldCompactRoundRoster || !shouldCondenseLiveLeaderboard ? "full" : "condensed";
   const roundRosterMode: RoundRosterMode =
@@ -4171,6 +4238,194 @@ function getResponsiveRoomLayoutState({
     liveLeaderboardMode,
     roundRosterMode,
     isMobileViewport
+  };
+}
+
+function getLiveRailChatFloor(density: DensityMode, comfort: "comfortable" | "minimum") {
+  if (comfort === "comfortable") {
+    if (density === "tight") {
+      return 214;
+    }
+
+    if (density === "compact") {
+      return 238;
+    }
+
+    return 262;
+  }
+
+  if (density === "tight") {
+    return 188;
+  }
+
+  if (density === "compact") {
+    return 212;
+  }
+
+  return 236;
+}
+
+function getEstimatedLivePlayersPanelHeight({
+  density,
+  liveLeaderboardMode,
+  playerCount,
+  spectatorCount
+}: {
+  density: DensityMode;
+  liveLeaderboardMode: LiveLeaderboardMode;
+  playerCount: number;
+  spectatorCount: number;
+}) {
+  const headerHeight =
+    density === "tight" ? 70 : density === "compact" ? 76 : 84;
+  const hintHeight =
+    density === "tight" ? 30 : density === "compact" ? 34 : 38;
+  const spectatorBadgeHeight =
+    spectatorCount > 0
+      ? density === "tight"
+        ? 34
+        : density === "compact"
+          ? 38
+          : 42
+      : 0;
+  const leaderboardMaxHeight =
+    liveLeaderboardMode === "condensed"
+      ? density === "tight"
+        ? 280
+        : density === "compact"
+          ? 320
+          : 360
+      : 430;
+  const rowHeight =
+    liveLeaderboardMode === "condensed"
+      ? density === "tight"
+        ? 48
+        : density === "compact"
+          ? 52
+          : 58
+      : density === "tight"
+        ? 58
+        : density === "compact"
+          ? 62
+          : 68;
+  const rowGap =
+    liveLeaderboardMode === "condensed"
+      ? density === "tight"
+        ? 4
+        : 5
+      : density === "tight"
+        ? 5
+        : 6;
+  const rawLeaderboardHeight =
+    playerCount > 0
+      ? playerCount * rowHeight + Math.max(0, playerCount - 1) * rowGap
+      : 0;
+
+  return (
+    headerHeight +
+    Math.min(rawLeaderboardHeight, leaderboardMaxHeight) +
+    hintHeight +
+    spectatorBadgeHeight
+  );
+}
+
+function getEstimatedCompactLivePlayersPanelHeight({
+  density,
+  spectatorCount
+}: {
+  density: DensityMode;
+  spectatorCount: number;
+}) {
+  const baseHeight =
+    density === "tight" ? 194 : density === "compact" ? 218 : 242;
+  const spectatorAdjustment =
+    spectatorCount > 0
+      ? density === "tight"
+        ? 24
+        : density === "compact"
+          ? 28
+          : 32
+      : 0;
+
+  return baseHeight + spectatorAdjustment;
+}
+
+function getProtectedRoundRailModes({
+  baseLiveLeaderboardMode,
+  baseRoundRosterMode,
+  density,
+  phase,
+  playerCount,
+  sideRailGap,
+  sideRailHeight,
+  spectatorCount
+}: {
+  baseLiveLeaderboardMode: LiveLeaderboardMode;
+  baseRoundRosterMode: RoundRosterMode;
+  density: DensityMode;
+  phase: RoomSnapshot["phase"];
+  playerCount: number;
+  sideRailGap: number;
+  sideRailHeight: number;
+  spectatorCount: number;
+}): Pick<ResponsiveRoomLayoutState, "liveLeaderboardMode" | "roundRosterMode"> {
+  if (phase !== "round-active" || baseRoundRosterMode === "compact") {
+    return {
+      liveLeaderboardMode: "full",
+      roundRosterMode: baseRoundRosterMode
+    };
+  }
+
+  const effectiveGap = Math.max(
+    sideRailGap,
+    density === "tight" ? 8 : density === "compact" ? 10 : 12
+  );
+  const fullPanelHeight = getEstimatedLivePlayersPanelHeight({
+    density,
+    liveLeaderboardMode: "full",
+    playerCount,
+    spectatorCount
+  });
+  const condensedPanelHeight = getEstimatedLivePlayersPanelHeight({
+    density,
+    liveLeaderboardMode: "condensed",
+    playerCount,
+    spectatorCount
+  });
+  const compactPanelHeight = getEstimatedCompactLivePlayersPanelHeight({
+    density,
+    spectatorCount
+  });
+  const comfortableChatFloor = getLiveRailChatFloor(density, "comfortable");
+  const minimumChatFloor = getLiveRailChatFloor(density, "minimum");
+
+  if (sideRailHeight - effectiveGap - compactPanelHeight < minimumChatFloor) {
+    return {
+      liveLeaderboardMode: "full",
+      roundRosterMode: "compact"
+    };
+  }
+
+  if (
+    baseLiveLeaderboardMode === "condensed" ||
+    sideRailHeight - effectiveGap - fullPanelHeight < comfortableChatFloor
+  ) {
+    if (sideRailHeight - effectiveGap - condensedPanelHeight < minimumChatFloor) {
+      return {
+        liveLeaderboardMode: "full",
+        roundRosterMode: "compact"
+      };
+    }
+
+    return {
+      liveLeaderboardMode: "condensed",
+      roundRosterMode: "full"
+    };
+  }
+
+  return {
+    liveLeaderboardMode: "full",
+    roundRosterMode: "full"
   };
 }
 
@@ -4188,13 +4443,12 @@ function getPageScrollMode(
 
   if (phase === "round-active" || phase === "round-ended") {
     if (
-      horizontalOverflow ||
-      verticalOverflow ||
-      viewportScale > 1.42 ||
-      viewportWidth < 920 ||
-      viewportHeight < 610 ||
-      (viewportWidth < 1100 && viewportHeight < 690) ||
-      (viewportScale > 1.24 && viewportWidth < 1240)
+      viewportScale > 1.72 ||
+      viewportWidth < 820 ||
+      viewportHeight < 430 ||
+      (viewportWidth < 900 && viewportHeight < 450) ||
+      (horizontalOverflow && viewportWidth < 960) ||
+      (verticalOverflow && viewportHeight < 430)
     ) {
       return "scroll";
     }
