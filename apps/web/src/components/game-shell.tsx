@@ -92,6 +92,12 @@ type LiveLeaderboardMode = "full" | "condensed";
 type RoundRosterMode = "full" | "compact";
 type RailPanelId = "invite" | "rules" | "chat" | "players";
 type ScrollMode = "fit" | "scroll";
+type LiveRoundResponsivePredicate =
+  | { kind: "widthBelow"; width: number }
+  | { kind: "widthAndHeightBelow"; width: number; height: number }
+  | { kind: "scaleAndWidthBelow"; scale: number; width: number }
+  | { kind: "densityEqualsAndWidthBelow"; density: DensityMode; width: number }
+  | { kind: "densityNotNormalAndWidthBelow"; width: number };
 
 type ResponsiveRoomLayoutState = {
   density: DensityMode;
@@ -124,6 +130,162 @@ function areResponsiveRoomLayoutStatesEqual(
     left.isMobileViewport === right.isMobileViewport
   );
 }
+
+// Live-round rail transitions are tuned per player-count bracket so we can reason about
+// full -> condensed -> compact behavior without a single long breakpoint expression.
+const LIVE_ROUND_RAIL_RULES = [
+  {
+    maxPlayers: 2,
+    compactPredicates: [
+      { kind: "widthBelow", width: 980 },
+      { kind: "widthAndHeightBelow", width: 1180, height: 620 },
+      { kind: "scaleAndWidthBelow", scale: 1.24, width: 1100 }
+    ],
+    condensedPredicates: [
+      { kind: "widthAndHeightBelow", width: 960, height: 660 },
+      { kind: "scaleAndWidthBelow", scale: 1.2, width: 1180 }
+    ]
+  },
+  {
+    maxPlayers: 4,
+    compactPredicates: [
+      { kind: "widthBelow", width: 1080 },
+      { kind: "widthAndHeightBelow", width: 1280, height: 680 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1200 },
+      { kind: "scaleAndWidthBelow", scale: 1.14, width: 1200 }
+    ],
+    condensedPredicates: [
+      { kind: "widthAndHeightBelow", width: 1120, height: 800 },
+      { kind: "scaleAndWidthBelow", scale: 1.14, width: 1280 }
+    ]
+  },
+  {
+    maxPlayers: 6,
+    compactPredicates: [
+      { kind: "widthBelow", width: 980 },
+      { kind: "widthAndHeightBelow", width: 1180, height: 700 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1260 },
+      { kind: "scaleAndWidthBelow", scale: 1.18, width: 1200 }
+    ],
+    condensedPredicates: [
+      { kind: "widthBelow", width: 1120 },
+      { kind: "widthAndHeightBelow", width: 1240, height: 760 },
+      { kind: "densityNotNormalAndWidthBelow", width: 1180 }
+    ]
+  },
+  {
+    maxPlayers: Number.POSITIVE_INFINITY,
+    compactPredicates: [
+      { kind: "widthBelow", width: 1420 },
+      { kind: "widthAndHeightBelow", width: 1600, height: 820 },
+      { kind: "densityEqualsAndWidthBelow", density: "tight", width: 1500 },
+      { kind: "scaleAndWidthBelow", scale: 1.02, width: 1560 }
+    ],
+    condensedPredicates: [
+      { kind: "widthBelow", width: 1380 },
+      { kind: "widthAndHeightBelow", width: 1560, height: 840 },
+      { kind: "densityNotNormalAndWidthBelow", width: 1460 }
+    ]
+  }
+] as const;
+
+// These sizing presets mirror the current live-rail CSS in game-shell.module.css.
+// Keep this table in sync with the condensed/full leaderboard caps and compact summary card styling.
+const LIVE_RAIL_PROTECTION_SIZING = {
+  chatFloor: {
+    comfortable: {
+      normal: 262,
+      compact: 238,
+      tight: 214
+    },
+    minimum: {
+      normal: 236,
+      compact: 212,
+      tight: 188
+    }
+  },
+  leaderboardChrome: {
+    headerHeight: {
+      normal: 84,
+      compact: 76,
+      tight: 70
+    },
+    hintHeight: {
+      normal: 38,
+      compact: 34,
+      tight: 30
+    },
+    spectatorBadgeHeight: {
+      normal: 42,
+      compact: 38,
+      tight: 34
+    }
+  },
+  leaderboardCaps: {
+    full: {
+      vhRatio: {
+        normal: 0.48,
+        compact: 0.48,
+        tight: 0.48
+      },
+      pxCap: {
+        normal: 430,
+        compact: 430,
+        tight: 430
+      }
+    },
+    condensed: {
+      vhRatio: {
+        normal: 0.42,
+        compact: 0.38,
+        tight: 0.34
+      },
+      pxCap: {
+        normal: 360,
+        compact: 320,
+        tight: 280
+      }
+    }
+  },
+  leaderboardRows: {
+    full: {
+      rowHeight: {
+        normal: 68,
+        compact: 62,
+        tight: 58
+      },
+      rowGap: {
+        normal: 6,
+        compact: 6,
+        tight: 5
+      }
+    },
+    condensed: {
+      rowHeight: {
+        normal: 58,
+        compact: 52,
+        tight: 48
+      },
+      rowGap: {
+        normal: 5,
+        compact: 5,
+        tight: 4
+      }
+    }
+  },
+  compactSummaryPanel: {
+    baseHeight: {
+      normal: 242,
+      compact: 218,
+      tight: 194
+    },
+    spectatorAdjustment: {
+      normal: 32,
+      compact: 28,
+      tight: 24
+    }
+  }
+} as const;
 
 type ThemeMode = "light" | "dark";
 const DISPLAY_NAME_KEY = "factorrush:last-name";
@@ -4154,6 +4316,49 @@ function getNotReadyBadge(locale: Locale) {
   return locale === "ko" ? "미준비" : "not ready";
 }
 
+function getDensitySizingValue<T>(values: Record<DensityMode, T>, density: DensityMode) {
+  return values[density];
+}
+
+function getLiveRoundRailRule(playerCount: number): (typeof LIVE_ROUND_RAIL_RULES)[number] {
+  const matchedRule = LIVE_ROUND_RAIL_RULES.find((rule) => playerCount <= rule.maxPlayers);
+  if (matchedRule) {
+    return matchedRule;
+  }
+
+  return LIVE_ROUND_RAIL_RULES[LIVE_ROUND_RAIL_RULES.length - 1]!;
+}
+
+function matchesLiveRoundResponsivePredicate(
+  predicate: LiveRoundResponsivePredicate,
+  {
+    density,
+    viewportHeight,
+    viewportScale,
+    viewportWidth
+  }: {
+    density: DensityMode;
+    viewportHeight: number;
+    viewportScale: number;
+    viewportWidth: number;
+  }
+) {
+  switch (predicate.kind) {
+    case "widthBelow":
+      return viewportWidth < predicate.width;
+    case "widthAndHeightBelow":
+      return viewportWidth < predicate.width && viewportHeight < predicate.height;
+    case "scaleAndWidthBelow":
+      return viewportScale > predicate.scale && viewportWidth < predicate.width;
+    case "densityEqualsAndWidthBelow":
+      return density === predicate.density && viewportWidth < predicate.width;
+    case "densityNotNormalAndWidthBelow":
+      return density !== "normal" && viewportWidth < predicate.width;
+    default:
+      return false;
+  }
+}
+
 function getResponsiveRoomLayoutState({
   phase,
   playerCount,
@@ -4194,47 +4399,27 @@ function getResponsiveRoomLayoutState({
     )
       ? "modal"
       : "inline";
+  const liveRoundRailRule = getLiveRoundRailRule(playerCount);
   const shouldCompactRoundRoster =
     phase === "round-active" &&
-    ((playerCount <= 2 &&
-      (viewportWidth < 980 ||
-        (viewportHeight < 620 && viewportWidth < 1180) ||
-        (viewportScale > 1.24 && viewportWidth < 1100))) ||
-      (playerCount >= 3 &&
-        playerCount <= 4 &&
-        (viewportWidth < 1080 ||
-          (viewportHeight < 680 && viewportWidth < 1280) ||
-          (density === "tight" && viewportWidth < 1200) ||
-          (viewportScale > 1.14 && viewportWidth < 1200))) ||
-      (playerCount >= 5 &&
-        playerCount <= 6 &&
-        (viewportWidth < 980 ||
-          (viewportHeight < 700 && viewportWidth < 1180) ||
-          (density === "tight" && viewportWidth < 1260) ||
-          (viewportScale > 1.18 && viewportWidth < 1200))) ||
-      (playerCount >= 7 &&
-        (viewportWidth < 1420 ||
-          (viewportHeight < 820 && viewportWidth < 1600) ||
-          (density === "tight" && viewportWidth < 1500) ||
-          (viewportScale > 1.02 && viewportWidth < 1560))));
+    liveRoundRailRule.compactPredicates.some((predicate) =>
+      matchesLiveRoundResponsivePredicate(predicate, {
+        density,
+        viewportHeight,
+        viewportScale,
+        viewportWidth
+      })
+    );
   const shouldCondenseLiveLeaderboard =
     phase === "round-active" &&
-    ((playerCount <= 2 &&
-      ((viewportWidth < 960 && viewportHeight < 660) ||
-        (viewportScale > 1.2 && viewportWidth < 1180))) ||
-      (playerCount >= 3 &&
-        playerCount <= 4 &&
-        ((viewportWidth < 1120 && viewportHeight < 800) ||
-          (viewportScale > 1.14 && viewportWidth < 1280))) ||
-      (playerCount >= 5 &&
-        playerCount <= 6 &&
-        (viewportWidth < 1120 ||
-          (viewportHeight < 760 && viewportWidth < 1240) ||
-          (density !== "normal" && viewportWidth < 1180))) ||
-      (playerCount >= 7 &&
-        (viewportWidth < 1380 ||
-          (viewportHeight < 840 && viewportWidth < 1560) ||
-          (density !== "normal" && viewportWidth < 1460))));
+    liveRoundRailRule.condensedPredicates.some((predicate) =>
+      matchesLiveRoundResponsivePredicate(predicate, {
+        density,
+        viewportHeight,
+        viewportScale,
+        viewportWidth
+      })
+    );
   const liveLeaderboardMode: LiveLeaderboardMode =
     shouldCompactRoundRoster || !shouldCondenseLiveLeaderboard ? "full" : "condensed";
   const roundRosterMode: RoundRosterMode =
@@ -4251,27 +4436,7 @@ function getResponsiveRoomLayoutState({
 }
 
 function getLiveRailChatFloor(density: DensityMode, comfort: "comfortable" | "minimum") {
-  if (comfort === "comfortable") {
-    if (density === "tight") {
-      return 214;
-    }
-
-    if (density === "compact") {
-      return 238;
-    }
-
-    return 262;
-  }
-
-  if (density === "tight") {
-    return 188;
-  }
-
-  if (density === "compact") {
-    return 212;
-  }
-
-  return 236;
+  return getDensitySizingValue(LIVE_RAIL_PROTECTION_SIZING.chatFloor[comfort], density);
 }
 
 function getEstimatedLivePlayersPanelHeight({
@@ -4287,46 +4452,35 @@ function getEstimatedLivePlayersPanelHeight({
   spectatorCount: number;
   viewportHeight: number;
 }) {
-  const headerHeight =
-    density === "tight" ? 70 : density === "compact" ? 76 : 84;
-  const hintHeight =
-    density === "tight" ? 30 : density === "compact" ? 34 : 38;
+  const headerHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.headerHeight,
+    density
+  );
+  const hintHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.hintHeight,
+    density
+  );
   const spectatorBadgeHeight =
     spectatorCount > 0
-      ? density === "tight"
-        ? 34
-        : density === "compact"
-          ? 38
-          : 42
+      ? getDensitySizingValue(
+          LIVE_RAIL_PROTECTION_SIZING.leaderboardChrome.spectatorBadgeHeight,
+          density
+        )
       : 0;
-  const leaderboardMaxHeight =
-    liveLeaderboardMode === "condensed"
-      ? density === "tight"
-        ? Math.min(viewportHeight * 0.34, 280)
-        : density === "compact"
-          ? Math.min(viewportHeight * 0.38, 320)
-          : Math.min(viewportHeight * 0.42, 360)
-      : Math.min(viewportHeight * 0.48, 430);
-  const rowHeight =
-    liveLeaderboardMode === "condensed"
-      ? density === "tight"
-        ? 48
-        : density === "compact"
-          ? 52
-          : 58
-      : density === "tight"
-        ? 58
-        : density === "compact"
-          ? 62
-          : 68;
-  const rowGap =
-    liveLeaderboardMode === "condensed"
-      ? density === "tight"
-        ? 4
-        : 5
-      : density === "tight"
-        ? 5
-        : 6;
+  const leaderboardSizing =
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardCaps[liveLeaderboardMode];
+  const leaderboardMaxHeight = Math.min(
+    viewportHeight * getDensitySizingValue(leaderboardSizing.vhRatio, density),
+    getDensitySizingValue(leaderboardSizing.pxCap, density)
+  );
+  const rowHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowHeight,
+    density
+  );
+  const rowGap = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.leaderboardRows[liveLeaderboardMode].rowGap,
+    density
+  );
   const rawLeaderboardHeight =
     playerCount > 0
       ? playerCount * rowHeight + Math.max(0, playerCount - 1) * rowGap
@@ -4347,15 +4501,16 @@ function getEstimatedCompactLivePlayersPanelHeight({
   density: DensityMode;
   spectatorCount: number;
 }) {
-  const baseHeight =
-    density === "tight" ? 194 : density === "compact" ? 218 : 242;
+  const baseHeight = getDensitySizingValue(
+    LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.baseHeight,
+    density
+  );
   const spectatorAdjustment =
     spectatorCount > 0
-      ? density === "tight"
-        ? 24
-        : density === "compact"
-          ? 28
-          : 32
+      ? getDensitySizingValue(
+          LIVE_RAIL_PROTECTION_SIZING.compactSummaryPanel.spectatorAdjustment,
+          density
+        )
       : 0;
 
   return baseHeight + spectatorAdjustment;
