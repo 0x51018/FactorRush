@@ -346,7 +346,6 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
   const activeRoomId = room?.roomId ?? initialRoomId ?? null;
   const copy = getCopy(locale);
-  const showAmbientInfo = !room || room.phase === "lobby" || room.phase === "finished";
 
   async function emitWithAck<TResponse>(eventName: string, payload: unknown): Promise<TResponse> {
     const socket = socketRef.current;
