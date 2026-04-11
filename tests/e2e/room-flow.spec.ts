@@ -51,6 +51,15 @@ function solveBaseConversionPrompt(prompt: string) {
   return targetBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(targetBase);
 }
 
+function getBaseConversionPreview(prompt: string, draft: string) {
+  const { sourceBase, targetBase } = parseBaseConversionPrompt(prompt);
+  const decimalValue = parseInt(draft, targetBase);
+  const previewValue =
+    sourceBase === 16 ? decimalValue.toString(16).toUpperCase() : decimalValue.toString(sourceBase);
+  const previewLabel = sourceBase === 2 ? "binary" : sourceBase === 16 ? "hex" : "decimal";
+  return `${previewLabel} ${previewValue}`;
+}
+
 function getWrongBaseConversionAnswer(prompt: string) {
   const { targetBase } = parseBaseConversionPrompt(prompt);
   const correctAnswer = solveBaseConversionPrompt(prompt);
@@ -80,6 +89,74 @@ function getRetryPenalty(score: number) {
   }
 
   return Math.max(1, Math.round(score * 0.1));
+}
+
+function parseNumberChainPrompt(prompt: string) {
+  const match = prompt.match(
+    /Continue from (\d+) with a (prime|composite) number that starts with (\d+)\./i
+  );
+  if (!match) {
+    throw new Error(`Unsupported number-chain prompt: ${prompt}`);
+  }
+
+  return {
+    currentNumber: Number(match[1]),
+    requiredKind: match[2].toLowerCase() as "prime" | "composite",
+    requiredStartDigit: Number(match[3])
+  };
+}
+
+function isPrimeNumber(value: number) {
+  if (value < 2) {
+    return false;
+  }
+
+  if (value === 2) {
+    return true;
+  }
+
+  if (value % 2 === 0) {
+    return false;
+  }
+
+  for (let divisor = 3; divisor * divisor <= value; divisor += 2) {
+    if (value % divisor === 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function solveNumberChainTurn(
+  requiredStartDigit: number,
+  requiredKind: "prime" | "composite",
+  usedNumbers: number[]
+) {
+  for (let candidate = 2; candidate <= 20_000; candidate += 1) {
+    if (!String(candidate).startsWith(String(requiredStartDigit))) {
+      continue;
+    }
+
+    if (candidate === 1 || candidate % 10 === 0 || usedNumbers.includes(candidate)) {
+      continue;
+    }
+
+    const isPrime = isPrimeNumber(candidate);
+    if (requiredKind === "prime" && !isPrime) {
+      continue;
+    }
+
+    if (requiredKind === "composite" && isPrime) {
+      continue;
+    }
+
+    return String(candidate);
+  }
+
+  throw new Error(
+    `Could not find a ${requiredKind} number starting with ${requiredStartDigit} outside ${usedNumbers.join(", ")}`
+  );
 }
 
 async function getLeaderboardScore(page: Page) {
@@ -596,7 +673,7 @@ test("mid-match joiners spectate first and can take a player seat back in the lo
   await spectatorPage.getByTestId("invite-name-input").fill("SpecWatcher");
   await spectatorPage.getByTestId("invite-join-button").click();
   await expect(spectatorPage.getByTestId("spectator-panel")).toBeVisible();
-  await expect(spectatorPage.locator("body")).toContainText("spectating");
+  await expect(spectatorPage.locator("body")).toContainText(/Spectating this round/i);
   await expect(hostPage.locator("body")).toContainText("SpecWatcher");
 
   await hostPage.getByTestId("live-reset-button").click();
@@ -675,7 +752,9 @@ test("base conversion mode supports fixed conversion pairs", async ({ page }) =>
   expect(prompt).toMatch(/from (binary|decimal) to (binary|decimal)\./i);
 
   await page.getByTestId("answer-input").fill("1010");
-  await expect(page.getByTestId("binary-preview")).toContainText(/(decimal|binary) 10/i);
+  await expect(page.getByTestId("binary-preview")).toContainText(
+    getBaseConversionPreview(prompt, "1010")
+  );
   await page.getByTestId("answer-input").fill(solveBaseConversionPrompt(prompt));
   await page.getByTestId("submit-answer-button").click();
   await expect(page.getByTestId("round-reveal-panel")).toBeVisible();
@@ -684,6 +763,65 @@ test("base conversion mode supports fixed conversion pairs", async ({ page }) =>
     path: ".codex-artifacts/qa-binary.png",
     fullPage: true
   });
+});
+
+test("number chain mode rotates turns and eliminates the player who breaks the chain", async ({
+  browser
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  await switchToEnglish(hostPage);
+  await hostPage.getByTestId("create-name-input").fill("ChainHost");
+  await hostPage.getByTestId("create-mode-chain").click();
+  await hostPage.getByTestId("create-room-button").click();
+
+  const inviteUrl = (await hostPage.getByTestId("invite-url").textContent())?.trim() ?? "";
+  await guestPage.goto(inviteUrl);
+  await expect(guestPage.getByTestId("connection-badge")).toHaveText("socket live", {
+    timeout: 15_000
+  });
+  await guestPage.getByTestId("invite-name-input").fill("ChainGuest");
+  await guestPage.getByTestId("invite-join-button").click();
+  await guestPage.getByTestId("ready-button").click();
+
+  await hostPage.getByTestId("start-button").click();
+  await expect(hostPage.getByTestId("answer-input")).toBeVisible();
+  await expect(guestPage.getByTestId("waiting-turn-panel")).toBeVisible();
+
+  const openingPrompt = (await hostPage.locator("h4").first().textContent()) ?? "";
+  const openingTurn = parseNumberChainPrompt(openingPrompt);
+  const usedNumbers = [openingTurn.currentNumber];
+  const hostAnswer = solveNumberChainTurn(
+    openingTurn.requiredStartDigit,
+    openingTurn.requiredKind,
+    usedNumbers
+  );
+
+  await hostPage.getByTestId("answer-input").fill(hostAnswer);
+  await hostPage.getByTestId("submit-answer-button").click();
+  await expect(hostPage.getByTestId("round-reveal-panel")).toBeVisible();
+
+  usedNumbers.push(Number(hostAnswer));
+  await expect(guestPage.getByTestId("answer-input")).toBeVisible({ timeout: 10_000 });
+  await expect(hostPage.getByTestId("waiting-turn-panel")).toBeVisible({ timeout: 10_000 });
+
+  const secondPrompt = (await guestPage.locator("h4").first().textContent()) ?? "";
+  const secondTurn = parseNumberChainPrompt(secondPrompt);
+  expect(secondTurn.currentNumber).toBe(Number(hostAnswer));
+  await guestPage.getByTestId("answer-input").fill("1");
+  await guestPage.getByTestId("submit-answer-button").click();
+
+  await expect(hostPage.getByTestId("round-reveal-panel")).toBeVisible();
+  await expect(hostPage.getByTestId("results-table")).toBeVisible({ timeout: 10_000 });
+  await expect(hostPage.locator("body")).toContainText("ChainHost");
+  await expect(hostPage.locator("body")).toContainText("ChainGuest");
+  await expect(guestPage.locator("body")).toContainText("1 cannot be used in the chain");
+
+  await hostContext.close();
+  await guestContext.close();
 });
 
 test("factor retry mode deducts 10 percent of the current score after a wrong answer", async ({
