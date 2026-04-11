@@ -21,14 +21,23 @@ export const SCORE_FALLBACK_POINTS = 40;
 export const SCORE_SPEED_BONUS_PER_SECOND = 2;
 export const GOLDEN_BELL_WINDOW_MS = 10_000;
 export const GOLDEN_BELL_PENALTY_POINTS = 60;
+export const RETRY_WRONG_ANSWER_PENALTY_PERCENT = 10;
+export const NUMBER_CHAIN_MIN_PLAYERS = 2;
+export const NUMBER_CHAIN_SUCCESS_BASE_POINTS = 50;
+export const NUMBER_CHAIN_SPEED_BONUS_PER_SECOND = 1;
+export const NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS = 35;
+export const NUMBER_CHAIN_RECENT_HISTORY_LIMIT = 8;
 export const MATCH_MAX_DURATION_MS = 60 * 60 * 1000;
 
-export type GameMode = "factor" | "binary";
+export type GameMode = "factor" | "binary" | "chain";
 export type RoomPhase = "lobby" | "round-active" | "round-ended" | "finished";
 export type ConversionBase = 2 | 10 | 16;
 export type BaseConversionPair = "2-10" | "10-16" | "2-16";
 export type FactorPrimeAnswerMode = "phrase" | "number";
 export type FactorResolutionMode = "all-play" | "first-correct" | "golden-bell";
+export type ChainNumberKind = "prime" | "composite";
+export type ChainRequirementMode = "mixed" | "prime-only";
+export type ChainTurnGoal = "last-survivor" | "one-elimination";
 export type SubmissionKind = "correct" | "wrong" | "chat";
 export type RoomRole = "player" | "spectator";
 export type RoomMessageKey =
@@ -36,6 +45,10 @@ export type RoomMessageKey =
   | "settings-updated"
   | "settings-updated-reset-ready"
   | "round-live"
+  | "chain-turn-live"
+  | "chain-turn-correct"
+  | "chain-turn-eliminated"
+  | "chain-turn-timeout"
   | "golden-bell-open"
   | "golden-bell-claimed"
   | "golden-bell-wrong"
@@ -66,6 +79,8 @@ export interface LobbySettings {
   factorSingleAttempt: boolean;
   factorGoldenBellSingleAttempt: boolean;
   factorSuddenDeath: boolean;
+  chainRequirementMode: ChainRequirementMode;
+  chainTurnGoal: ChainTurnGoal;
 }
 
 export interface MatchSettings {
@@ -81,6 +96,8 @@ export interface PlayerSummary {
   connected: boolean;
   correctAnswers: number;
   isReady: boolean;
+  isEliminated?: boolean;
+  eliminationOrder?: number;
 }
 
 export interface SpectatorSummary {
@@ -104,6 +121,8 @@ export interface PlayerRoundStatus {
   lastSubmittedAt?: number;
   isLockedOut?: boolean;
   isAnswering?: boolean;
+  isCurrentTurn?: boolean;
+  isEliminated?: boolean;
 }
 
 export interface RoundSnapshot {
@@ -111,7 +130,7 @@ export interface RoundSnapshot {
   mode: GameMode;
   prompt: string;
   helperText: string;
-  challengeMeta: PrimeFactorChallengeMeta | BinaryChallengeMeta;
+  challengeMeta: PrimeFactorChallengeMeta | BinaryChallengeMeta | NumberChainChallengeMeta;
   startedAt: number;
   endsAt: number;
   hasRoundTimer: boolean;
@@ -165,6 +184,17 @@ export interface BinaryChallengeMeta {
   targetValue: string;
 }
 
+export interface NumberChainChallengeMeta {
+  currentNumber: number;
+  requiredStartDigit: number;
+  requiredKind: ChainNumberKind;
+  currentTurnPlayerId: string;
+  alivePlayerIds: string[];
+  eliminatedPlayerIds: string[];
+  usedNumbers: number[];
+  recentNumbers: number[];
+}
+
 export interface Challenge {
   id: string;
   mode: GameMode;
@@ -172,7 +202,7 @@ export interface Challenge {
   helperText: string;
   answer: string;
   prettyAnswer: string;
-  meta: PrimeFactorChallengeMeta | BinaryChallengeMeta;
+  meta: PrimeFactorChallengeMeta | BinaryChallengeMeta | NumberChainChallengeMeta;
 }
 
 export interface SubmissionEvaluation {
@@ -180,7 +210,17 @@ export interface SubmissionEvaluation {
   normalizedExpectedAnswer: string;
   isCorrect: boolean;
   reason: SubmissionKind;
+  detailCode?: NumberChainFailureCode;
 }
+
+export type NumberChainFailureCode =
+  | "invalid-number"
+  | "wrong-start-digit"
+  | "used-number"
+  | "needs-prime"
+  | "needs-composite"
+  | "ends-with-zero"
+  | "one-not-allowed";
 
 export interface ChatMessage {
   id: string;
@@ -191,9 +231,11 @@ export interface ChatMessage {
   systemKey?:
     | "match-started"
     | "round-started"
+    | "chain-turn-started"
     | "player-joined"
     | "player-correct"
     | "player-wrong"
+    | "chain-player-eliminated"
     | "spectator-joined"
     | "player-kicked"
     | "player-left"
@@ -276,6 +318,8 @@ export interface SubmitAnswerResult {
   isLockedOut?: boolean;
   wasChatLike?: boolean;
   scoreDelta?: number;
+  failureCode?: NumberChainFailureCode;
+  wasEliminated?: boolean;
 }
 
 export interface JoinRoomResult {
@@ -299,7 +343,9 @@ export const DEFAULT_LOBBY_SETTINGS: LobbySettings = {
   factorOrderedAnswer: false,
   factorSingleAttempt: false,
   factorGoldenBellSingleAttempt: false,
-  factorSuddenDeath: false
+  factorSuddenDeath: false,
+  chainRequirementMode: "mixed",
+  chainTurnGoal: "last-survivor"
 };
 
 export const DEFAULT_MATCH_SETTINGS: MatchSettings = {
@@ -341,7 +387,10 @@ export function sanitizeChatMessage(input: string) {
 
 export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
   return {
-    mode: input?.mode === "binary" ? "binary" : "factor",
+    mode:
+      input?.mode === "binary" || input?.mode === "chain"
+        ? input.mode
+        : "factor",
     roundCount: clampNumber(input?.roundCount ?? DEFAULT_LOBBY_SETTINGS.roundCount, 3, 50),
     roundTimeSec: clampNumber(input?.roundTimeSec ?? DEFAULT_LOBBY_SETTINGS.roundTimeSec, 15, 90),
     baseConversionPair:
@@ -357,7 +406,11 @@ export function clampSettings(input?: Partial<LobbySettings>): LobbySettings {
     factorOrderedAnswer: Boolean(input?.factorOrderedAnswer),
     factorSingleAttempt: Boolean(input?.factorSingleAttempt),
     factorGoldenBellSingleAttempt: Boolean(input?.factorGoldenBellSingleAttempt),
-    factorSuddenDeath: Boolean(input?.factorSuddenDeath)
+    factorSuddenDeath: Boolean(input?.factorSuddenDeath),
+    chainRequirementMode:
+      input?.chainRequirementMode === "prime-only" ? "prime-only" : "mixed",
+    chainTurnGoal:
+      input?.chainTurnGoal === "one-elimination" ? "one-elimination" : "last-survivor"
   };
 }
 
@@ -369,13 +422,27 @@ export function clampMatchSettings(input?: Partial<MatchSettings>): MatchSetting
 }
 
 export function getModeLabel(mode: GameMode) {
-  return mode === "factor" ? "Prime Factor Sprint" : "Base Conversion Mode";
+  if (mode === "binary") {
+    return "Base Conversion Mode";
+  }
+
+  if (mode === "chain") {
+    return "Number Chain Mode";
+  }
+
+  return "Prime Factor Sprint";
 }
 
 export function getModeDescription(mode: GameMode) {
-  return mode === "factor"
-    ? "Break the target into prime factors faster than everyone else."
-    : "Convert between base 2, 10, and 16 faster than everyone else.";
+  if (mode === "binary") {
+    return "Convert between base 2, 10, and 16 faster than everyone else.";
+  }
+
+  if (mode === "chain") {
+    return "Take turns extending the chain from the previous last digit until the match condition is reached.";
+  }
+
+  return "Break the target into prime factors faster than everyone else.";
 }
 
 export function createInvitePath(roomId: string) {
@@ -403,11 +470,19 @@ export function generateChallenge(input: GameMode | LobbySettings, randomValue =
     return createBinaryChallenge(settings.baseConversionPair, randomValue);
   }
 
+  if (settings.mode === "chain") {
+    throw new Error("Number chain mode requires explicit chain state to generate a turn.");
+  }
+
   return createFactorChallenge(settings, randomValue);
 }
 
 export function evaluateSubmission(challenge: Challenge, answer: string): SubmissionEvaluation {
   // 모드별로 입력 포맷이 다르기 때문에 정규화 후 비교한다.
+  if (challenge.mode === "chain") {
+    return evaluateNumberChainSubmission(challenge.meta as NumberChainChallengeMeta, answer);
+  }
+
   if (challenge.mode === "binary") {
     const expected = normalizeBaseConversionAnswer(challenge.meta as BinaryChallengeMeta, challenge.answer);
     const submitted = normalizeBaseConversionAnswer(challenge.meta as BinaryChallengeMeta, answer);
@@ -454,6 +529,70 @@ export function calculatePoints(rank: number, endsAt: number, submittedAt: numbe
   const speedBonus = Math.round(remainingMs / 1000) * SCORE_SPEED_BONUS_PER_SECOND;
   const basePoints = SCORE_BASE_POINTS_BY_RANK[rank - 1] ?? SCORE_FALLBACK_POINTS;
   return basePoints + speedBonus;
+}
+
+export function calculateRetryWrongAnswerPenalty(currentScore: number) {
+  if (currentScore <= 0) {
+    return 0;
+  }
+
+  return Math.max(
+    1,
+    Math.round((currentScore * RETRY_WRONG_ANSWER_PENALTY_PERCENT) / 100)
+  );
+}
+
+export function calculateNumberChainTurnPoints(endsAt: number, submittedAt: number) {
+  const remainingMs = Math.max(0, endsAt - submittedAt);
+  const speedBonus =
+    Math.round(remainingMs / 1000) * NUMBER_CHAIN_SPEED_BONUS_PER_SECOND;
+  return NUMBER_CHAIN_SUCCESS_BASE_POINTS + speedBonus;
+}
+
+export function createNumberChainSeed(randomValue = Math.random) {
+  const candidates = Array.from({ length: 98 }, (_, index) => index + 2).filter(
+    (value) => value % 10 !== 0
+  );
+  return candidates[Math.floor(randomValue() * candidates.length)] ?? 11;
+}
+
+export function createNumberChainChallenge(
+  input: {
+    currentNumber: number;
+    currentTurnPlayerId: string;
+    alivePlayerIds: string[];
+    eliminatedPlayerIds: string[];
+    usedNumbers: number[];
+    requirementMode?: ChainRequirementMode;
+    requiredKind?: ChainNumberKind;
+  },
+  randomValue = Math.random
+): Challenge {
+  const requiredStartDigit = Number(String(input.currentNumber).at(-1) ?? "0");
+  const requiredKind =
+    input.requiredKind ??
+    (input.requirementMode === "prime-only" ? "prime" : pickNumberChainKind(randomValue));
+  const recentNumbers = input.usedNumbers.slice(-NUMBER_CHAIN_RECENT_HISTORY_LIMIT);
+
+  return {
+    id: createId("chain", randomValue),
+    mode: "chain",
+    prompt: `Continue from ${input.currentNumber} with a ${requiredKind} number that starts with ${requiredStartDigit}.`,
+    helperText:
+      "No reused numbers, 1 is invalid, and numbers ending in 0 are banned.",
+    answer: "",
+    prettyAnswer: "",
+    meta: {
+      currentNumber: input.currentNumber,
+      requiredStartDigit,
+      requiredKind,
+      currentTurnPlayerId: input.currentTurnPlayerId,
+      alivePlayerIds: [...input.alivePlayerIds],
+      eliminatedPlayerIds: [...input.eliminatedPlayerIds],
+      usedNumbers: [...input.usedNumbers],
+      recentNumbers
+    }
+  };
 }
 
 export function getBinaryPreviewValue(meta: BinaryChallengeMeta, value: string) {
@@ -545,6 +684,93 @@ function createFactorChallenge(settings: LobbySettings, randomValue: () => numbe
   };
 }
 
+function evaluateNumberChainSubmission(
+  meta: NumberChainChallengeMeta,
+  answer: string
+): SubmissionEvaluation {
+  const normalizedAnswer = normalizeNumberChainAnswer(answer);
+  const normalizedExpectedAnswer = `${meta.requiredStartDigit}:${meta.requiredKind}`;
+
+  if (!normalizedAnswer) {
+    return {
+      normalizedAnswer: "",
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "invalid-number"
+    };
+  }
+
+  const parsed = Number(normalizedAnswer);
+  if (parsed === 1) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "one-not-allowed"
+    };
+  }
+
+  if (parsed % 10 === 0) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "ends-with-zero"
+    };
+  }
+
+  if (!normalizedAnswer.startsWith(String(meta.requiredStartDigit))) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "wrong-start-digit"
+    };
+  }
+
+  if (meta.usedNumbers.includes(parsed)) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "used-number"
+    };
+  }
+
+  const isPrime = isPrimeNumber(parsed);
+  if (meta.requiredKind === "prime" && !isPrime) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "needs-prime"
+    };
+  }
+
+  if (meta.requiredKind === "composite" && isPrime) {
+    return {
+      normalizedAnswer,
+      normalizedExpectedAnswer,
+      isCorrect: false,
+      reason: "wrong",
+      detailCode: "needs-composite"
+    };
+  }
+
+  return {
+    normalizedAnswer,
+    normalizedExpectedAnswer,
+    isCorrect: true,
+    reason: "correct"
+  };
+}
+
 function createBinaryChallenge(basePair: BaseConversionPair, randomValue: () => number): Challenge {
   const [leftBase, rightBase] = parseBaseConversionPair(basePair);
   const swapDirection = randomValue() < 0.5;
@@ -614,6 +840,16 @@ function normalizeBinaryModeAnswer(meta: BinaryChallengeMeta, value: string) {
 function normalizeBaseConversionAnswer(meta: BinaryChallengeMeta, value: string) {
   const parsed = parseBaseValue(value, meta.targetBase);
   return parsed === null ? "" : formatBaseValue(parsed, meta.targetBase);
+}
+
+function normalizeNumberChainAnswer(value: string) {
+  const normalized = value.replace(/[\s,]+/g, "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    return "";
+  }
+
+  const parsed = Number(normalized);
+  return Number.isInteger(parsed) && parsed > 0 ? String(parsed) : "";
 }
 
 function parseBaseConversionPair(pair: BaseConversionPair): [ConversionBase, ConversionBase] {
@@ -719,9 +955,63 @@ function factorizeNumber(value: number) {
   return primeFactors;
 }
 
+function pickNumberChainKind(randomValue: () => number): ChainNumberKind {
+  return randomValue() < 0.5 ? "prime" : "composite";
+}
+
+function isPrimeNumber(value: number) {
+  if (value < 2) {
+    return false;
+  }
+
+  if (value === 2) {
+    return true;
+  }
+
+  if (value % 2 === 0) {
+    return false;
+  }
+
+  for (let divisor = 3; divisor * divisor <= value; divisor += 2) {
+    if (value % divisor === 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function toSuperscript(value: number) {
   return String(value)
     .split("")
     .map((digit) => SUPERSCRIPT_DIGITS[digit] ?? digit)
     .join("");
 }
+
+export const ALLOWED_MIME_TYPES = [
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/octet-stream"
+] as const;
+
+export const ALLOWED_EXTENSION = ".pptx";
+
+export const ERROR_CODES = {
+  INVALID_FILE_TYPE: "INVALID_FILE_TYPE",
+  FILE_TOO_LARGE: "FILE_TOO_LARGE",
+  LIBREOFFICE_NOT_FOUND: "LIBREOFFICE_NOT_FOUND",
+  CONVERSION_TIMEOUT: "CONVERSION_TIMEOUT",
+  CONVERSION_FAILED: "CONVERSION_FAILED",
+  OUTPUT_NOT_FOUND: "OUTPUT_NOT_FOUND",
+  TOO_MANY_CONCURRENT_JOBS: "TOO_MANY_CONCURRENT_JOBS",
+  NO_FILE: "NO_FILE",
+  INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR"
+} as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+
+export type ApiError = {
+  error: {
+    code: ErrorCode;
+    message: string;
+  };
+};

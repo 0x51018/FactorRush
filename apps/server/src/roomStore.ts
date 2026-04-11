@@ -16,8 +16,14 @@
  */
 import type { Server, Socket } from "socket.io";
 import {
+  calculateNumberChainTurnPoints,
+  calculateRetryWrongAnswerPenalty,
+  createNumberChainChallenge,
+  createNumberChainSeed,
   DEFAULT_MATCH_SETTINGS,
   MAX_PLAYERS_PER_ROOM,
+  NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS,
+  NUMBER_CHAIN_MIN_PLAYERS,
   PLAYER_NAME_MAX_LENGTH,
   ROOM_IDLE_GRACE_MS,
   calculatePoints,
@@ -39,11 +45,14 @@ import {
   sortPlayersByScore,
   type ChatMessage,
   type Challenge,
+  type ChainNumberKind,
   type CreateRoomRequest,
   type JoinRoomRequest,
   type JoinRoomResult,
   type LobbySettings,
   type MatchSettings,
+  type NumberChainFailureCode,
+  type NumberChainChallengeMeta,
   type PlayerSummary,
   type RoomRole,
   type RenamePlayerRequest,
@@ -114,6 +123,14 @@ interface InternalRound {
   answerWindowTimer: NodeJS.Timeout | null;
 }
 
+interface NumberChainState {
+  currentNumber: number;
+  usedNumbers: number[];
+  alivePlayerIds: string[];
+  eliminatedPlayerIds: string[];
+  currentTurnPlayerId: string;
+}
+
 interface RoomRecord {
   roomId: string;
   roomName: string;
@@ -123,6 +140,7 @@ interface RoomRecord {
   matchSettings: MatchSettings;
   players: PlayerRecord[];
   spectators: SpectatorRecord[];
+  numberChainState: NumberChainState | null;
   round: InternalRound | null;
   completedRounds: number;
   matchStartedAt?: number;
@@ -208,6 +226,7 @@ export class RoomStore {
         }
       ],
       spectators: [],
+      numberChainState: null,
       round: null,
       completedRounds: 0,
       matchStartedAt: undefined,
@@ -346,6 +365,10 @@ export class RoomStore {
           recentChatTimestamps: [],
           disconnectTimer: null
         });
+
+        if (room.settings.mode === "chain" && room.numberChainState) {
+          room.numberChainState.alivePlayerIds.push(playerId);
+        }
 
         this.socketToSeat.set(socket.id, { roomId, memberId: playerId, role: "player" });
         socket.join(roomId);
@@ -657,6 +680,13 @@ export class RoomStore {
       return { ok: false, error: "At least one connected player is required to start." };
     }
 
+    if (room.settings.mode === "chain" && connectedPlayers.length < NUMBER_CHAIN_MIN_PLAYERS) {
+      return {
+        ok: false,
+        error: "Number chain mode needs at least two connected players to start."
+      };
+    }
+
     if (!this.haveAllRequiredPlayersReady(room)) {
       return { ok: false, error: "Everyone needs to click ready before the host can start." };
     }
@@ -666,6 +696,19 @@ export class RoomStore {
     room.completedRounds = 0;
     room.finalWinnerIds = [];
     room.completedRoundDurationsMs = [];
+    room.numberChainState =
+      room.settings.mode === "chain"
+        ? {
+            currentNumber: createNumberChainSeed(),
+            usedNumbers: [],
+            alivePlayerIds: connectedPlayers.map((candidate) => candidate.id),
+            eliminatedPlayerIds: [],
+            currentTurnPlayerId: connectedPlayers[0]?.id ?? room.players[0]?.id ?? ""
+          }
+        : null;
+    if (room.numberChainState) {
+      room.numberChainState.usedNumbers = [room.numberChainState.currentNumber];
+    }
     room.matchStartedAt = Date.now();
     room.matchEndsAt = room.matchStartedAt + MATCH_MAX_DURATION_MS;
     room.messagePlayerName = undefined;
@@ -891,6 +934,10 @@ export class RoomStore {
       return { ok: false, error: "There is no active round right now." };
     }
 
+    if (room.settings.mode === "chain") {
+      return this.submitNumberChainAnswer(room, player, request.answer);
+    }
+
     const existingSubmission = room.round.submissions.find((submission) => submission.playerId === player.id);
     if (existingSubmission) {
       return {
@@ -951,6 +998,8 @@ export class RoomStore {
         };
       }
 
+      const scorePenalty = this.getRetryWrongAnswerPenalty(room, player);
+      const scoreDelta = scorePenalty === 0 ? 0 : -scorePenalty;
       const submittedAt = Date.now();
       room.round.attempts.push({
         playerId: player.id,
@@ -958,8 +1007,9 @@ export class RoomStore {
         normalizedAnswer: evaluation.normalizedAnswer,
         submittedAt,
         kind: "wrong",
-        scoreDelta: 0
+        scoreDelta
       });
+      player.score -= scorePenalty;
       this.addSystemChatMessage(room, {
         systemKey: "player-wrong",
         playerName: player.name,
@@ -973,6 +1023,7 @@ export class RoomStore {
           isCorrect: false,
           normalizedAnswer: evaluation.normalizedAnswer,
           attemptCount: wrongAttemptCount + 1,
+          scoreDelta,
           isLockedOut:
             room.settings.factorSingleAttempt && room.settings.mode === "factor"
         }
@@ -1039,6 +1090,205 @@ export class RoomStore {
         normalizedAnswer: evaluation.normalizedAnswer
       }
     };
+  }
+
+  private createNumberChainTurn(room: RoomRecord) {
+    if (!room.numberChainState) {
+      const connectedPlayers = room.players.filter((candidate) => candidate.connected);
+      room.numberChainState = {
+        currentNumber: createNumberChainSeed(),
+        usedNumbers: [],
+        alivePlayerIds: connectedPlayers.map((candidate) => candidate.id),
+        eliminatedPlayerIds: [],
+        currentTurnPlayerId: connectedPlayers[0]?.id ?? room.players[0]?.id ?? ""
+      };
+      room.numberChainState.usedNumbers = [room.numberChainState.currentNumber];
+    }
+
+    return createNumberChainChallenge({
+      currentNumber: room.numberChainState.currentNumber,
+      currentTurnPlayerId: room.numberChainState.currentTurnPlayerId,
+      alivePlayerIds: room.numberChainState.alivePlayerIds,
+      eliminatedPlayerIds: room.numberChainState.eliminatedPlayerIds,
+      usedNumbers: room.numberChainState.usedNumbers,
+      requirementMode: room.settings.chainRequirementMode
+    });
+  }
+
+  private submitNumberChainAnswer(
+    room: RoomRecord,
+    player: PlayerRecord,
+    answer: string
+  ): SocketAck<SubmitAnswerResult> {
+    if (!room.round || !room.numberChainState) {
+      return { ok: false, error: "There is no active round right now." };
+    }
+
+    if (room.numberChainState.eliminatedPlayerIds.includes(player.id)) {
+      return { ok: false, error: "You were already eliminated from this match." };
+    }
+
+    if (room.numberChainState.currentTurnPlayerId !== player.id) {
+      return { ok: false, error: "It is not your turn in number chain mode." };
+    }
+
+    const evaluation = evaluateSubmission(room.round.challenge, answer);
+    if (!evaluation.isCorrect) {
+      return {
+        ok: true,
+        data: this.resolveNumberChainFailure(room, player.id, {
+          answer: answer.trim(),
+          normalizedAnswer: evaluation.normalizedAnswer,
+          failureCode: evaluation.detailCode ?? "invalid-number",
+          reason: "wrong"
+        })
+      };
+    }
+
+    const submittedAt = Date.now();
+    const pointsAwarded = calculateNumberChainTurnPoints(room.round.endsAt, submittedAt);
+    const submittedNumber = Number(evaluation.normalizedAnswer);
+    room.round.submissions.push({
+      playerId: player.id,
+      answer: evaluation.normalizedAnswer,
+      normalizedAnswer: evaluation.normalizedAnswer,
+      submittedAt,
+      pointsAwarded,
+      rank: 1
+    });
+    player.score += pointsAwarded;
+    player.correctAnswers += 1;
+    room.numberChainState.currentNumber = submittedNumber;
+    room.numberChainState.usedNumbers.push(submittedNumber);
+    this.addSystemChatMessage(room, {
+      systemKey: "player-correct",
+      playerName: player.name
+    });
+    room.message = `${player.name} extended the chain with ${submittedNumber}.`;
+    room.messageKey = "chain-turn-correct";
+    room.messagePlayerName = player.name;
+    this.endRound(room.roomId, "chain-success");
+
+    return {
+      ok: true,
+      data: {
+        isCorrect: true,
+        normalizedAnswer: evaluation.normalizedAnswer
+      }
+    };
+  }
+
+  private resolveNumberChainFailure(
+    room: RoomRecord,
+    playerId: string,
+    input: {
+      answer: string;
+      normalizedAnswer: string;
+      failureCode: NumberChainFailureCode;
+      reason: "wrong" | "timeout";
+    }
+  ): SubmitAnswerResult {
+    if (!room.round || !room.numberChainState) {
+      return {
+        isCorrect: false,
+        normalizedAnswer: "",
+        attemptCount: 0,
+        isLockedOut: true,
+        wasEliminated: true,
+        scoreDelta: 0
+      };
+    }
+
+    const player = room.players.find((candidate) => candidate.id === playerId);
+    if (!player) {
+      return {
+        isCorrect: false,
+        normalizedAnswer: input.normalizedAnswer,
+        attemptCount: 1,
+        isLockedOut: true,
+        wasEliminated: true,
+        failureCode: input.failureCode,
+        scoreDelta: 0
+      };
+    }
+
+    const submittedAt = Date.now();
+    room.round.attempts.push({
+      playerId: player.id,
+      answer: input.answer,
+      normalizedAnswer: input.normalizedAnswer,
+      submittedAt,
+      kind: "wrong",
+      scoreDelta: -NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS
+    });
+    player.score -= NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS;
+    room.numberChainState.alivePlayerIds = room.numberChainState.alivePlayerIds.filter(
+      (candidateId) => candidateId !== player.id
+    );
+    if (!room.numberChainState.eliminatedPlayerIds.includes(player.id)) {
+      room.numberChainState.eliminatedPlayerIds.push(player.id);
+    }
+    this.addSystemChatMessage(room, {
+      systemKey: "chain-player-eliminated",
+      playerName: player.name,
+      answerText: input.answer
+    });
+    room.message =
+      input.reason === "timeout"
+        ? `${player.name} ran out of time and was eliminated from the chain.`
+        : `${player.name} broke the chain and was eliminated.`;
+    room.messageKey = input.reason === "timeout" ? "chain-turn-timeout" : "chain-turn-eliminated";
+    room.messagePlayerName = player.name;
+    this.endRound(room.roomId, input.reason === "timeout" ? "chain-timeout" : "chain-eliminated");
+
+    return {
+      isCorrect: false,
+      normalizedAnswer: input.normalizedAnswer,
+      attemptCount: 1,
+      isLockedOut: true,
+      wasEliminated: true,
+      failureCode: input.failureCode,
+      scoreDelta: -NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS
+    };
+  }
+
+  private advanceNumberChainTurn(room: RoomRecord) {
+    if (!room.numberChainState) {
+      return;
+    }
+
+    const nextTurnPlayerId = this.getNextNumberChainTurnPlayerId(
+      room,
+      room.numberChainState.currentTurnPlayerId
+    );
+    if (nextTurnPlayerId) {
+      room.numberChainState.currentTurnPlayerId = nextTurnPlayerId;
+    }
+  }
+
+  private getNextNumberChainTurnPlayerId(
+    room: RoomRecord,
+    fromPlayerId: string,
+    fallbackIndex = -1
+  ) {
+    if (!room.numberChainState || room.numberChainState.alivePlayerIds.length === 0) {
+      return null;
+    }
+
+    const aliveSet = new Set(room.numberChainState.alivePlayerIds);
+    let startIndex = room.players.findIndex((candidate) => candidate.id === fromPlayerId);
+    if (startIndex < 0) {
+      startIndex = fallbackIndex;
+    }
+
+    for (let offset = 1; offset <= room.players.length; offset += 1) {
+      const candidate = room.players[(startIndex + offset + room.players.length) % room.players.length];
+      if (candidate && aliveSet.has(candidate.id)) {
+        return candidate.id;
+      }
+    }
+
+    return room.numberChainState.alivePlayerIds[0] ?? null;
   }
 
   disconnect(socketId: string) {
@@ -1183,7 +1433,10 @@ export class RoomStore {
 
     const now = Date.now();
     const roundNumber = room.completedRounds + 1;
-    const challenge = generateChallenge(room.settings);
+    const challenge =
+      room.settings.mode === "chain"
+        ? this.createNumberChainTurn(room)
+        : generateChallenge(room.settings);
     const hasRoundTimer = true;
     room.phase = "round-active";
     room.autoResetAt = undefined;
@@ -1202,18 +1455,33 @@ export class RoomStore {
       timer: null,
       answerWindowTimer: null
     };
-    room.message =
-      room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
-        ? `Round ${roundNumber} is live. Buzz first to earn a 10-second answer window.`
-        : `Round ${roundNumber} is live. Fast correct answers get the biggest score boost.`;
-    room.messageKey =
-      room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
-        ? "golden-bell-open"
-        : "round-live";
-    room.messagePlayerName = undefined;
-    this.addSystemChatMessage(room, {
-      systemKey: roundNumber === 1 ? "match-started" : "round-started"
-    });
+    if (room.settings.mode === "chain") {
+      const chainMeta = challenge.meta as NumberChainChallengeMeta;
+      const currentTurnPlayer =
+        room.players.find((candidate) => candidate.id === chainMeta.currentTurnPlayerId) ?? null;
+      room.message = currentTurnPlayer
+        ? `${currentTurnPlayer.name} must answer with a ${chainMeta.requiredKind} number starting with ${chainMeta.requiredStartDigit}.`
+        : `Continue the chain with a ${chainMeta.requiredKind} number starting with ${chainMeta.requiredStartDigit}.`;
+      room.messageKey = "chain-turn-live";
+      room.messagePlayerName = currentTurnPlayer?.name;
+      this.addSystemChatMessage(room, {
+        systemKey: roundNumber === 1 ? "match-started" : "chain-turn-started",
+        playerName: currentTurnPlayer?.name
+      });
+    } else {
+      room.message =
+        room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
+          ? `Round ${roundNumber} is live. Buzz first to earn a 10-second answer window.`
+          : `Round ${roundNumber} is live. Fast correct answers get the biggest score boost.`;
+      room.messageKey =
+        room.settings.mode === "factor" && room.settings.factorResolutionMode === "golden-bell"
+          ? "golden-bell-open"
+          : "round-live";
+      room.messagePlayerName = undefined;
+      this.addSystemChatMessage(room, {
+        systemKey: roundNumber === 1 ? "match-started" : "round-started"
+      });
+    }
 
     if (hasRoundTimer) {
       // 라운드 종료는 타이머 만료 또는 전원 정답 제출 두 경로로 일어난다.
@@ -1225,9 +1493,30 @@ export class RoomStore {
     this.emitRoom(room);
   }
 
-  private endRound(roomId: string, reason: "timer" | "all-correct" | "first-correct" | "all-resolved") {
+  private endRound(
+    roomId: string,
+    reason:
+      | "timer"
+      | "all-correct"
+      | "first-correct"
+      | "all-resolved"
+      | "chain-success"
+      | "chain-eliminated"
+      | "chain-timeout"
+  ) {
     const room = this.rooms.get(roomId);
     if (!room || room.phase !== "round-active" || !room.round) {
+      return;
+    }
+
+    if (room.settings.mode === "chain" && reason === "timer") {
+      const chainMeta = room.round.challenge.meta as NumberChainChallengeMeta;
+      this.resolveNumberChainFailure(room, chainMeta.currentTurnPlayerId, {
+        answer: "",
+        normalizedAnswer: "",
+        failureCode: "invalid-number",
+        reason: "timeout"
+      });
       return;
     }
 
@@ -1254,10 +1543,18 @@ export class RoomStore {
     room.round.isMainTimerPaused = false;
     room.round.mainTimerRemainingMs = undefined;
     const delayMs =
-      room.completedRounds >= room.settings.roundCount ? FINAL_RESULTS_DELAY_MS : ROUND_REVEAL_MS;
+      room.settings.mode === "chain"
+        ? (room.numberChainState?.alivePlayerIds.length ?? 0) <= 1
+          ? FINAL_RESULTS_DELAY_MS
+          : ROUND_REVEAL_MS
+        : room.completedRounds >= room.settings.roundCount
+          ? FINAL_RESULTS_DELAY_MS
+          : ROUND_REVEAL_MS;
     room.round.transitionEndsAt = Date.now() + delayMs;
 
-    if (reason === "first-correct") {
+    if (reason === "chain-success" || reason === "chain-eliminated" || reason === "chain-timeout") {
+      // chain turns set a more specific room.message before ending the turn.
+    } else if (reason === "first-correct") {
       room.message = "The first correct answer ended the round early.";
       room.messageKey = "first-correct";
       room.messagePlayerName = undefined;
@@ -1289,6 +1586,25 @@ export class RoomStore {
     }
 
     this.clearTransitionTimer(room);
+
+    if (room.settings.mode === "chain") {
+      if (
+        room.settings.chainTurnGoal === "one-elimination" &&
+        (room.numberChainState?.eliminatedPlayerIds.length ?? 0) >= 1
+      ) {
+        this.finalizeMatch(room);
+        return;
+      }
+
+      if ((room.numberChainState?.alivePlayerIds.length ?? 0) <= 1) {
+        this.finalizeMatch(room);
+        return;
+      }
+
+      this.advanceNumberChainTurn(room);
+      this.startRound(room);
+      return;
+    }
 
     if (room.completedRounds >= room.settings.roundCount) {
       this.finalizeMatch(room);
@@ -1360,6 +1676,13 @@ export class RoomStore {
   }
 
   private computeWinnerIds(room: RoomRecord) {
+    if (room.settings.mode === "chain") {
+      const alivePlayerIds = room.numberChainState?.alivePlayerIds ?? [];
+      if (alivePlayerIds.length > 0) {
+        return [...alivePlayerIds];
+      }
+    }
+
     const sortedPlayers = sortPlayersByScore(room.players);
     const topScore = sortedPlayers[0]?.score ?? 0;
     return sortedPlayers
@@ -1386,6 +1709,22 @@ export class RoomStore {
     return room.round?.attempts.filter(
       (attempt) => attempt.playerId === playerId && attempt.kind === "wrong"
     ).length ?? 0;
+  }
+
+  private getRetryWrongAnswerPenalty(room: RoomRecord, player: PlayerRecord) {
+    if (room.settings.mode === "binary") {
+      return calculateRetryWrongAnswerPenalty(player.score);
+    }
+
+    if (
+      room.settings.mode === "factor" &&
+      room.settings.factorResolutionMode !== "golden-bell" &&
+      !room.settings.factorSingleAttempt
+    ) {
+      return calculateRetryWrongAnswerPenalty(player.score);
+    }
+
+    return 0;
   }
 
   private expireGoldenBellClaim(roomId: string, playerId: string) {
@@ -1648,6 +1987,7 @@ export class RoomStore {
 
     this.clearMemberDisconnectTimer(player);
 
+    const removedIndex = room.players.findIndex((candidate) => candidate.id === player.id);
     const removedName = player.name;
     const removedWasHost = player.isHost;
     const removedWasAnswering = room.round?.answeringPlayerId === player.id;
@@ -1686,6 +2026,10 @@ export class RoomStore {
       playerName: removedName
     });
 
+    if (room.settings.mode === "chain" && this.handleNumberChainPlayerRemoval(room, player.id, removedIndex)) {
+      return;
+    }
+
     if (removedWasAnswering && room.round) {
       this.clearAnswerWindowTimer(room);
       room.round.answeringPlayerId = null;
@@ -1708,6 +2052,64 @@ export class RoomStore {
     }
 
     this.emitRoom(room);
+  }
+
+  private handleNumberChainPlayerRemoval(room: RoomRecord, playerId: string, removedIndex: number) {
+    if (!room.numberChainState) {
+      return false;
+    }
+
+    room.numberChainState.alivePlayerIds = room.numberChainState.alivePlayerIds.filter(
+      (candidateId) => candidateId !== playerId
+    );
+    room.numberChainState.eliminatedPlayerIds = room.numberChainState.eliminatedPlayerIds.filter(
+      (candidateId) => candidateId !== playerId
+    );
+
+    if (room.settings.chainTurnGoal === "one-elimination") {
+      if (room.phase === "round-active" && room.round) {
+        this.clearRoundTimer(room);
+        this.clearTransitionTimer(room);
+        this.clearAnswerWindowTimer(room);
+        room.completedRounds = room.round.roundNumber;
+        room.completedRoundDurationsMs.push(Math.max(0, Date.now() - room.round.startedAt));
+        room.round = null;
+      }
+
+      this.finalizeMatch(room);
+      return true;
+    }
+
+    if (room.numberChainState.alivePlayerIds.length <= 1) {
+      if (room.phase === "round-active" && room.round) {
+        this.clearRoundTimer(room);
+        this.clearTransitionTimer(room);
+        this.clearAnswerWindowTimer(room);
+        room.completedRounds = room.round.roundNumber;
+        room.completedRoundDurationsMs.push(Math.max(0, Date.now() - room.round.startedAt));
+        room.round = null;
+      }
+
+      this.finalizeMatch(room);
+      return true;
+    }
+
+    if (room.phase === "round-active" && room.numberChainState.currentTurnPlayerId === playerId) {
+      room.completedRounds = room.round?.roundNumber ?? room.completedRounds;
+      if (room.round) {
+        room.completedRoundDurationsMs.push(Math.max(0, Date.now() - room.round.startedAt));
+      }
+      room.round = null;
+      room.phase = "round-ended";
+      const nextTurnPlayerId = this.getNextNumberChainTurnPlayerId(room, playerId, removedIndex - 1);
+      if (nextTurnPlayerId) {
+        room.numberChainState.currentTurnPlayerId = nextTurnPlayerId;
+      }
+      this.startRound(room);
+      return true;
+    }
+
+    return false;
   }
 
   private removePlayerImmediately(room: RoomRecord, playerId: string, reason: PlayerRemovalReason = "left") {
@@ -1848,7 +2250,14 @@ export class RoomStore {
         isHost: player.isHost,
         connected: player.connected,
         correctAnswers: player.correctAnswers,
-        isReady: player.isReady
+        isReady: player.isReady,
+        isEliminated: room.numberChainState?.eliminatedPlayerIds.includes(player.id),
+        eliminationOrder: (() => {
+          const eliminationOrder = room.numberChainState?.eliminatedPlayerIds.findIndex(
+            (candidateId) => candidateId === player.id
+          );
+          return eliminationOrder != null && eliminationOrder >= 0 ? eliminationOrder + 1 : undefined;
+        })()
       })),
       spectators: room.spectators.map((spectator) => ({
         id: spectator.id,
@@ -1877,7 +2286,11 @@ export class RoomStore {
               room.phase === "round-active" ? room.round.answerWindowEndsAt : undefined,
             transitionEndsAt: room.phase === "round-ended" ? room.round.transitionEndsAt : undefined,
             revealedAnswer:
-              room.phase === "round-active" ? undefined : room.round.challenge.prettyAnswer,
+              room.phase === "round-active"
+                ? undefined
+                : room.settings.mode === "chain"
+                  ? room.round.submissions[0]?.answer ?? room.round.attempts.at(-1)?.answer
+                  : room.round.challenge.prettyAnswer,
             playerStatuses: room.players.map((player) => {
               const submission = room.round?.submissions.find(
                 (candidate) => candidate.playerId === player.id
@@ -1890,6 +2303,11 @@ export class RoomStore {
                 room.round?.attempts
                   .filter((candidate) => candidate.playerId === player.id)
                   .sort((left, right) => right.submittedAt - left.submittedAt)[0] ?? null;
+              const isEliminated = room.numberChainState?.eliminatedPlayerIds.includes(player.id) ?? false;
+              const isCurrentTurn =
+                room.settings.mode === "chain" &&
+                room.phase === "round-active" &&
+                room.numberChainState?.currentTurnPlayerId === player.id;
 
               if (!submission) {
                 return {
@@ -1901,7 +2319,9 @@ export class RoomStore {
                   lastSubmissionText: latestAttempt?.answer,
                   lastSubmittedAt: latestAttempt?.submittedAt,
                   isLockedOut: this.isPlayerLockedOutForRound(room, player.id),
-                  isAnswering: room.round?.answeringPlayerId === player.id
+                  isAnswering: room.round?.answeringPlayerId === player.id,
+                  isCurrentTurn,
+                  isEliminated
                 };
               }
 
@@ -1913,7 +2333,9 @@ export class RoomStore {
                   scoreDelta: submission.pointsAwarded,
                   lastSubmissionKind: "correct",
                   lastSubmittedAt: submission.submittedAt,
-                  isAnswering: room.round?.answeringPlayerId === player.id
+                  isAnswering: room.round?.answeringPlayerId === player.id,
+                  isCurrentTurn,
+                  isEliminated
                 };
               }
 
@@ -1930,7 +2352,9 @@ export class RoomStore {
                 lastSubmissionKind: "correct",
                 lastSubmissionText: submission.answer,
                 lastSubmittedAt: submission.submittedAt,
-                isAnswering: room.round?.answeringPlayerId === player.id
+                isAnswering: room.round?.answeringPlayerId === player.id,
+                isCurrentTurn,
+                isEliminated
               };
             })
           }
@@ -2057,6 +2481,7 @@ export class RoomStore {
     this.clearTransitionTimer(room);
     this.clearAnswerWindowTimer(room);
     room.phase = "lobby";
+    room.numberChainState = null;
     room.round = null;
     room.completedRounds = 0;
     room.finalWinnerIds = [];
@@ -2085,6 +2510,8 @@ function areLobbySettingsEqual(left: LobbySettings, right: LobbySettings) {
     left.factorOrderedAnswer === right.factorOrderedAnswer &&
     left.factorSingleAttempt === right.factorSingleAttempt &&
     left.factorGoldenBellSingleAttempt === right.factorGoldenBellSingleAttempt &&
-    left.factorSuddenDeath === right.factorSuddenDeath
+    left.factorSuddenDeath === right.factorSuddenDeath &&
+    left.chainRequirementMode === right.chainRequirementMode &&
+    left.chainTurnGoal === right.chainTurnGoal
   );
 }
