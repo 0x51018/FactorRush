@@ -9,6 +9,7 @@ async function main() {
 
   results.push(await runScenario("factor"));
   results.push(await runScenario("binary"));
+  results.push(await runNumberChainScenario());
   results.push(await runGoldenBellScenario());
   results.push(await runSuddenDeathScenario());
   results.push(await runSpectatorScenario());
@@ -272,6 +273,102 @@ async function runScenario(mode) {
       roomId: created.roomId,
       prompt,
       revealedAnswer: endedState.round.revealedAnswer
+    };
+  } finally {
+    host.disconnect();
+    guest.disconnect();
+  }
+}
+
+async function runNumberChainScenario() {
+  const host = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+  const guest = io(SERVER_URL, { autoConnect: false, transports: ["websocket"] });
+
+  const hostObserver = createRoomObserver(host);
+  const guestObserver = createRoomObserver(guest);
+
+  try {
+    await Promise.all([connect(host), connect(guest)]);
+
+    const created = await emitAck(host, "room:create", {
+      playerName: "chain-Host",
+      settings: {
+        mode: "chain",
+        roundTimeSec: 20
+      }
+    });
+
+    await hostObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 1);
+
+    const joined = await emitAck(guest, "room:join", {
+      roomId: created.roomId,
+      playerName: "chain-Guest"
+    });
+
+    await guestObserver.waitFor((state) => state.roomId === created.roomId && state.players.length === 2);
+
+    await emitAck(guest, "room:set-ready", {
+      roomId: created.roomId,
+      isReady: true
+    });
+
+    await emitAck(host, "game:start", { roomId: created.roomId });
+
+    const firstTurnState = await hostObserver.waitFor(
+      (state) => state.phase === "round-active" && state.round?.mode === "chain"
+    );
+    const firstPrompt = firstTurnState.round?.prompt;
+    if (!firstPrompt) {
+      throw new Error("체인 모드 첫 턴 문제를 받지 못했습니다.");
+    }
+
+    const firstTurn = parseNumberChainPrompt(firstPrompt);
+    const usedNumbers = [firstTurn.currentNumber];
+    const firstAnswer = solveNumberChainTurn(
+      firstTurn.requiredStartDigit,
+      firstTurn.requiredKind,
+      usedNumbers
+    );
+
+    await emitAck(host, "round:submit-answer", {
+      roomId: created.roomId,
+      answer: firstAnswer
+    });
+
+    await hostObserver.waitFor(
+      (state) => state.phase === "round-ended" && state.messageKey === "chain-turn-correct"
+    );
+
+    const secondTurnState = await guestObserver.waitFor(
+      (state) =>
+        state.phase === "round-active" &&
+        state.round?.mode === "chain" &&
+        state.round.roundNumber === 2
+    );
+    const secondPrompt = secondTurnState.round?.prompt;
+    if (!secondPrompt) {
+      throw new Error("체인 모드 두 번째 턴 문제를 받지 못했습니다.");
+    }
+
+    await emitAck(guest, "round:submit-answer", {
+      roomId: created.roomId,
+      answer: "1"
+    });
+
+    const eliminatedState = await hostObserver.waitFor(
+      (state) => state.phase === "round-ended" && state.messageKey === "chain-turn-eliminated"
+    );
+    const finishedState = await hostObserver.waitFor((state) => state.phase === "finished");
+
+    return {
+      mode: "chain",
+      roomId: created.roomId,
+      firstPrompt,
+      secondPrompt,
+      firstAnswer,
+      eliminatedPlayer: joined.playerId,
+      winnerIds: finishedState.finalWinnerIds,
+      messageKey: eliminatedState.messageKey
     };
   } finally {
     host.disconnect();
@@ -558,6 +655,71 @@ function deriveAnswer(prompt) {
   }
 
   throw new Error(`알 수 없는 문제 형식입니다: ${prompt}`);
+}
+
+function parseNumberChainPrompt(prompt) {
+  const match = prompt.match(
+    /^Continue from (\d+) with a (prime|composite) number that starts with (\d+)\.$/i
+  );
+
+  if (!match?.[1] || !match[2] || !match[3]) {
+    throw new Error(`알 수 없는 체인 문제 형식입니다: ${prompt}`);
+  }
+
+  return {
+    currentNumber: Number(match[1]),
+    requiredKind: match[2].toLowerCase(),
+    requiredStartDigit: Number(match[3])
+  };
+}
+
+function solveNumberChainTurn(requiredStartDigit, requiredKind, usedNumbers) {
+  for (let candidate = 2; candidate <= 20000; candidate += 1) {
+    if (!String(candidate).startsWith(String(requiredStartDigit))) {
+      continue;
+    }
+
+    if (candidate === 1 || candidate % 10 === 0 || usedNumbers.includes(candidate)) {
+      continue;
+    }
+
+    const isPrime = isPrimeNumber(candidate);
+    if (requiredKind === "prime" && !isPrime) {
+      continue;
+    }
+
+    if (requiredKind === "composite" && isPrime) {
+      continue;
+    }
+
+    return String(candidate);
+  }
+
+  throw new Error(
+    `체인 조건을 만족하는 수를 찾지 못했습니다: ${requiredKind}, ${requiredStartDigit}, ${usedNumbers.join(",")}`
+  );
+}
+
+function isPrimeNumber(value) {
+  if (value < 2) {
+    return false;
+  }
+
+  if (value === 2) {
+    return true;
+  }
+
+  if (value % 2 === 0) {
+    return false;
+  }
+
+  for (let divisor = 3; divisor * divisor <= value; divisor += 2) {
+    if (value % divisor === 0) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function factorize(value) {
