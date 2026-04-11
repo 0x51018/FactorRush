@@ -34,6 +34,9 @@ import {
   FACTOR_PRIME_SHOUT,
   GOLDEN_BELL_PENALTY_POINTS,
   MAX_PLAYERS_PER_ROOM,
+  NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS,
+  NUMBER_CHAIN_SPEED_BONUS_PER_SECOND,
+  NUMBER_CHAIN_SUCCESS_BASE_POINTS,
   PLAYER_NAME_MAX_LENGTH,
   RETRY_WRONG_ANSWER_PENALTY_PERCENT,
   SCORE_BASE_POINTS_BY_RANK,
@@ -52,6 +55,7 @@ import {
   type GameMode,
   type JoinRoomResult,
   type LobbySettings,
+  type NumberChainChallengeMeta,
   type PlayerRoundStatus,
   type PrimeFactorChallengeMeta,
   type RoomRole,
@@ -680,13 +684,21 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       });
   }, [copy.reconnectExpired, copy.reconnectSuccess, initialRoomId, isConnected, room]);
 
-  const sortedPlayers = room ? sortPlayersByScore(room.players) : [];
+  const sortedPlayers = room ? getSortedPlayersForDisplay(room) : [];
   const currentPlayer = room?.players.find((candidate) => candidate.id === playerId) ?? null;
   const currentSpectator = room?.spectators.find((candidate) => candidate.id === playerId) ?? null;
   const myRoundStatus =
     room?.round?.playerStatuses.find((candidate) => candidate.playerId === playerId) ?? null;
   const isSpectator = currentSpectator != null || memberRole === "spectator";
   const isHost = currentPlayer?.isHost ?? false;
+  const isChainRound = room?.settings.mode === "chain";
+  const currentChainMeta =
+    room?.round?.mode === "chain" ? (room.round.challengeMeta as NumberChainChallengeMeta) : null;
+  const chainTurnPlayer =
+    currentChainMeta?.currentTurnPlayerId != null
+      ? room?.players.find((candidate) => candidate.id === currentChainMeta.currentTurnPlayerId) ?? null
+      : null;
+  const isMyChainTurn = Boolean(isChainRound && chainTurnPlayer?.id === playerId);
   const browserOrigin =
     typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:3000";
   const inviteUrl = activeRoomId
@@ -705,7 +717,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     room?.round && roundDuration > 0 ? Math.max(0, Math.min(1, roundRemainingMs / roundDuration)) : 0;
 
   useEffect(() => {
-    if (room?.phase !== "round-active" || myRoundStatus?.hasSubmitted || isSpectator) {
+    if (room?.phase !== "round-active" || isSpectator) {
+      return;
+    }
+
+    if (isChainRound) {
+      if (!isMyChainTurn || myRoundStatus?.isEliminated) {
+        return;
+      }
+    } else if (myRoundStatus?.hasSubmitted) {
       return;
     }
 
@@ -717,7 +737,15 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [isSpectator, myRoundStatus?.hasSubmitted, room?.phase, room?.round?.roundNumber]);
+  }, [
+    isChainRound,
+    isMyChainTurn,
+    isSpectator,
+    myRoundStatus?.hasSubmitted,
+    myRoundStatus?.isEliminated,
+    room?.phase,
+    room?.round?.roundNumber
+  ]);
 
   useEffect(() => {
     const handleGlobalEnterFocus = (event: KeyboardEvent) => {
@@ -737,7 +765,11 @@ export function GameShell({ initialRoomId }: GameShellProps) {
       }
 
       const nextTarget =
-        room?.phase === "round-active" && !myRoundStatus?.hasSubmitted && !isSpectator
+        room?.phase === "round-active" &&
+        !isSpectator &&
+        (isChainRound
+          ? isMyChainTurn && !myRoundStatus?.isEliminated
+          : !myRoundStatus?.hasSubmitted)
           ? answerInputRef.current
           : initialRoomId || roomCode
             ? !displayName.trim()
@@ -758,7 +790,17 @@ export function GameShell({ initialRoomId }: GameShellProps) {
     return () => {
       window.removeEventListener("keydown", handleGlobalEnterFocus);
     };
-  }, [displayName, initialRoomId, isSpectator, myRoundStatus?.hasSubmitted, room?.phase, roomCode]);
+  }, [
+    displayName,
+    initialRoomId,
+    isChainRound,
+    isMyChainTurn,
+    isSpectator,
+    myRoundStatus?.hasSubmitted,
+    myRoundStatus?.isEliminated,
+    room?.phase,
+    roomCode
+  ]);
 
   const navigateToRoom = (roomId: string) => {
     router.push(createInvitePath(roomId));
@@ -1009,6 +1051,8 @@ export function GameShell({ initialRoomId }: GameShellProps) {
 
       if (result.isCorrect) {
         setFeedback(copy.answerAccepted);
+      } else if (room.settings.mode === "chain") {
+        setFeedback(getNumberChainFailureFeedback(locale, result, currentChainMeta));
       } else if ((result.scoreDelta ?? 0) < 0) {
         setFeedback(
           locale === "ko"
@@ -1550,8 +1594,8 @@ function LandingExperience({
 
           <div className={styles.field}>
             <span>{copy.startModeLabel}</span>
-            <div className={styles.modeChoiceRow} data-columns="2">
-              {(["factor", "binary"] as const).map((modeValue) => (
+            <div className={styles.modeChoiceRow} data-columns="3">
+              {(["factor", "binary", "chain"] as const).map((modeValue) => (
                 <button
                   className={styles.modeChoiceButton}
                   data-active={createMode === modeValue}
@@ -1826,6 +1870,14 @@ function RoomExperience({
   const currentSpectator = room.spectators.find((candidate) => candidate.id === playerId) ?? null;
   const currentMember = currentPlayer ?? currentSpectator;
   const isSpectator = currentPlayer == null && (currentSpectator != null || memberRole === "spectator");
+  const isChainMode = room.settings.mode === "chain";
+  const currentChainMeta =
+    room.round?.mode === "chain" ? (room.round.challengeMeta as NumberChainChallengeMeta) : null;
+  const chainTurnPlayer =
+    currentChainMeta?.currentTurnPlayerId != null
+      ? room.players.find((candidate) => candidate.id === currentChainMeta.currentTurnPlayerId) ?? null
+      : null;
+  const isMyChainTurn = Boolean(isChainMode && chainTurnPlayer?.id === playerId);
   const submittedCount =
     room.round?.playerStatuses.filter((candidate) => candidate.hasSubmitted).length ?? 0;
   const winnerNames = room.finalWinnerIds
@@ -1877,7 +1929,9 @@ function RoomExperience({
   const answerLabelHint =
     room.settings.mode === "factor"
       ? getFactorAnswerInlineHint(locale, room.round, room.settings)
-      : null;
+      : room.settings.mode === "chain"
+        ? getNumberChainInlineHint(locale, currentChainMeta)
+        : null;
   const binaryPreviewText =
     room.phase === "round-active" &&
     room.round?.mode === "binary" &&
@@ -1886,7 +1940,7 @@ function RoomExperience({
     !myRoundStatus?.hasSubmitted
       ? getBinaryPreviewText(locale, room.round.challengeMeta as BinaryChallengeMeta, answerDraft)
       : null;
-  const showChallengeHelper = room.settings.mode === "binary";
+  const showChallengeHelper = room.settings.mode !== "factor";
   const resultsAutoResetSeconds =
     room.autoResetAt != null ? Math.max(0, Math.ceil((room.autoResetAt - now) / 1000)) : 0;
   const factorResolutionSummary =
@@ -1946,7 +2000,7 @@ function RoomExperience({
               name: candidate.name,
               totalScore: candidate.score,
               delta: status.scoreDelta ?? status.pointsAwarded ?? 0,
-              statusLabel: getRevealStatusLabel(locale, status),
+              statusLabel: getRevealStatusLabel(locale, room.settings.mode, status),
               isCorrect: status.hasSubmitted
             };
           })
@@ -1966,6 +2020,27 @@ function RoomExperience({
   const correctPlayers = roundDeltaRows.filter((entry) => entry.isCorrect);
   const revealSummary = getRevealSummary(locale, room, correctPlayers);
   const revealDeltaRange = getRevealDeltaRange(locale, roundDeltaRows);
+  const chainSuccessfulTurn =
+    isChainMode && room.phase === "round-ended" && room.round
+      ? room.round.playerStatuses.find((status) => status.hasSubmitted) ?? null
+      : null;
+  const chainEliminatedTurn =
+    isChainMode && room.phase === "round-ended" && room.round
+      ? room.round.playerStatuses.find((status) => status.isEliminated && (status.scoreDelta ?? 0) < 0) ?? null
+      : null;
+  const chainAliveCount =
+    currentChainMeta == null
+      ? 0
+      : chainEliminatedTurn
+        ? Math.max(0, currentChainMeta.alivePlayerIds.length - 1)
+        : currentChainMeta.alivePlayerIds.length;
+  const chainUsedCount =
+    currentChainMeta == null
+      ? 0
+      : chainSuccessfulTurn
+        ? currentChainMeta.usedNumbers.length + 1
+        : currentChainMeta.usedNumbers.length;
+  const chainRecentNumbers = currentChainMeta?.recentNumbers ?? [];
   const currentPlayerRank =
     currentPlayer != null ? sortedPlayers.findIndex((candidate) => candidate.id === currentPlayer.id) + 1 : null;
   const leadingPlayer = sortedPlayers[0] ?? null;
@@ -2652,8 +2727,8 @@ function RoomExperience({
           <div className={styles.leaderboard} data-testid="leaderboard">
             {sortedPlayers.map((candidate, index) => {
               const status = room.round?.playerStatuses.find((entry) => entry.playerId === candidate.id);
-              const state = getLeaderboardState(status);
-              const roundBoardStatus = getRoundBoardStatus(locale, status);
+              const state = getLeaderboardState(room.settings.mode, status);
+              const roundBoardStatus = getRoundBoardStatus(locale, room.settings.mode, status);
               const attemptCount = status?.attemptCount ?? 0;
               const condensedStatusDescription = showCondensedLiveLeaderboard
                 ? locale === "ko"
@@ -2733,9 +2808,13 @@ function RoomExperience({
           </div>
         ) : null}
         <p className={styles.compactHint}>
-          {locale === "ko"
-            ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
-            : `${submittedCount}/${room.players.length} players are correct.`}
+          {isChainMode
+            ? locale === "ko"
+              ? `생존 ${chainAliveCount}명 · 사용된 수 ${chainUsedCount}개`
+              : `${chainAliveCount} players alive · ${chainUsedCount} numbers used`
+            : locale === "ko"
+              ? `${submittedCount}/${room.players.length}명이 정답을 맞혔습니다.`
+              : `${submittedCount}/${room.players.length} players are correct.`}
         </p>
       </div>
     </section>
@@ -2774,15 +2853,21 @@ function RoomExperience({
 
         <div className={styles.compactRosterStatGrid}>
           <div className={styles.compactRosterStat}>
-            <span>{locale === "ko" ? "내 순위" : "My rank"}</span>
+            <span>{isChainMode ? copy.chainTurnLabel : locale === "ko" ? "내 순위" : "My rank"}</span>
             <strong>
-              {currentPlayerRank != null ? `#${currentPlayerRank}` : locale === "ko" ? "관전 중" : "Watching"}
+              {isChainMode
+                ? chainTurnPlayer?.name ?? (locale === "ko" ? "대기" : "Waiting")
+                : currentPlayerRank != null
+                  ? `#${currentPlayerRank}`
+                  : locale === "ko"
+                    ? "관전 중"
+                    : "Watching"}
             </strong>
           </div>
           <div className={styles.compactRosterStat}>
-            <span>{locale === "ko" ? "정답자" : "Correct"}</span>
+            <span>{isChainMode ? copy.chainAliveLabel : locale === "ko" ? "정답자" : "Correct"}</span>
             <strong>
-              {submittedCount}/{room.players.length}
+              {isChainMode ? `${chainAliveCount}/${room.players.length}` : `${submittedCount}/${room.players.length}`}
             </strong>
           </div>
           {spectatorCount > 0 ? (
@@ -2796,11 +2881,27 @@ function RoomExperience({
         </div>
       </div>
 
-      {leadingPlayer && leadingPlayerStatus ? (
+      {isChainMode ? (
+        <p className={styles.compactHint}>
+          {chainTurnPlayer
+            ? locale === "ko"
+              ? `${chainTurnPlayer.name}님이 ${currentChainMeta?.requiredStartDigit}로 시작하는 ${
+                  currentChainMeta?.requiredKind === "prime"
+                    ? copy.chainRequirementPrime
+                    : copy.chainRequirementComposite
+                } 수를 찾는 중입니다.`
+              : `${chainTurnPlayer.name} is searching for a ${
+                  currentChainMeta?.requiredKind === "prime"
+                    ? copy.chainRequirementPrime.toLowerCase()
+                    : copy.chainRequirementComposite.toLowerCase()
+                } number that starts with ${currentChainMeta?.requiredStartDigit}.`
+            : null}
+        </p>
+      ) : leadingPlayer && leadingPlayerStatus ? (
         <p className={styles.compactHint}>
           {locale === "ko"
-            ? `${leadingPlayer.name}님이 시도 ${leadingPlayerStatus.attemptCount ?? 0}회로 선두입니다. 현재 상태: ${getRoundBoardStatus(locale, leadingPlayerStatus)}`
-            : `${leadingPlayer.name} leads with ${leadingPlayerStatus.attemptCount ?? 0} tries. Current state: ${getRoundBoardStatus(locale, leadingPlayerStatus)}`}
+            ? `${leadingPlayer.name}님이 시도 ${leadingPlayerStatus.attemptCount ?? 0}회로 선두입니다. 현재 상태: ${getRoundBoardStatus(locale, room.settings.mode, leadingPlayerStatus)}`
+            : `${leadingPlayer.name} leads with ${leadingPlayerStatus.attemptCount ?? 0} tries. Current state: ${getRoundBoardStatus(locale, room.settings.mode, leadingPlayerStatus)}`}
         </p>
       ) : null}
     </section>
@@ -2966,7 +3067,9 @@ function RoomExperience({
             <span data-testid="room-id-chip">{room.roomId}</span>
             <span>{getModeLabelByLocale(locale, room.settings.mode)}</span>
             <span>
-              {(room.round?.roundNumber ?? room.completedRounds)}/{room.settings.roundCount}
+              {isChainMode
+                ? `${room.round?.roundNumber ?? room.completedRounds} ${locale === "ko" ? "턴" : "turns"}`
+                : `${room.round?.roundNumber ?? room.completedRounds}/${room.settings.roundCount}`}
             </span>
             <span data-testid="match-clock-chip">{formatClock(matchElapsedMs, locale)}</span>
             {room.averageRoundDurationMs > 0 ? (
@@ -3069,14 +3172,24 @@ function RoomExperience({
                     </span>
                   ) : null}
                   <span>{getModeLabelByLocale(locale, room.settings.mode)}</span>
-                  <span>
-                    {room.settings.roundCount} {copy.roundsUnit}
-                  </span>
+                  {room.settings.mode !== "chain" ? (
+                    <span>
+                      {room.settings.roundCount} {copy.roundsUnit}
+                    </span>
+                  ) : (
+                    <span>{locale === "ko" ? "끝까지 생존" : "last survivor wins"}</span>
+                  )}
                   <span>
                     {roundTimeSummary}
                   </span>
                   {binaryRatioSummary ? <span>{binaryRatioSummary}</span> : null}
                   {factorResolutionSummary ? <span>{factorResolutionSummary}</span> : null}
+                  {room.settings.mode === "chain" ? (
+                    <>
+                      <span>{locale === "ko" ? "소수/합성수 랜덤 제시" : "prime/composite target"}</span>
+                      <span>{locale === "ko" ? "재사용 금지" : "no reuse"}</span>
+                    </>
+                  ) : null}
                   {room.settings.mode === "factor" && room.settings.factorOrderedAnswer ? (
                     <span>{locale === "ko" ? "하드 순서" : "ordered hard"}</span>
                   ) : null}
@@ -3289,6 +3402,35 @@ function RoomExperience({
                   ) : null}
                 </div>
                 {showChallengeHelper ? <p>{roundCopy?.helper}</p> : null}
+                {isChainMode && currentChainMeta ? (
+                  <div className={styles.chainInfoGrid}>
+                    <div className={styles.chainInfoCard}>
+                      <span>{copy.chainCurrentLabel}</span>
+                      <strong>{currentChainMeta.currentNumber}</strong>
+                    </div>
+                    <div className={styles.chainInfoCard}>
+                      <span>{copy.chainTurnLabel}</span>
+                      <strong>{chainTurnPlayer?.name ?? "-"}</strong>
+                    </div>
+                    <div className={styles.chainInfoCard}>
+                      <span>{copy.chainAliveLabel}</span>
+                      <strong>
+                        {chainAliveCount}/{room.players.length}
+                      </strong>
+                    </div>
+                    <div className={styles.chainInfoCard}>
+                      <span>{copy.chainUsedLabel}</span>
+                      <strong>{chainUsedCount}</strong>
+                    </div>
+                  </div>
+                ) : null}
+                {isChainMode && chainRecentNumbers.length > 1 ? (
+                  <div className={styles.chainTrail}>
+                    {chainRecentNumbers.map((value) => (
+                      <span key={`${value}-${currentChainMeta?.currentTurnPlayerId}`}>{value}</span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
 
               {room.phase === "round-active" ? (
@@ -3301,6 +3443,83 @@ function RoomExperience({
                     <strong>{copy.spectatorLiveTitle}</strong>
                     <p>{copy.spectatorLiveBody}</p>
                   </div>
+                ) : isChainMode ? (
+                  myRoundStatus?.isEliminated ? (
+                    <div className={styles.revealPanel} data-state="locked" data-testid="locked-panel">
+                      <span className={styles.challengeLabel}>{copy.chainAliveLabel}</span>
+                      <strong>{copy.chainEliminatedTitle}</strong>
+                      <p>{copy.chainEliminatedBody}</p>
+                    </div>
+                  ) : !isMyChainTurn ? (
+                    <div className={styles.waitingPanel} data-testid="waiting-turn-panel">
+                      <span className={styles.challengeLabel}>{copy.chainTurnLabel}</span>
+                      <strong>
+                        {chainTurnPlayer
+                          ? locale === "ko"
+                            ? `${chainTurnPlayer.name}님의 차례입니다.`
+                            : `${chainTurnPlayer.name} is taking the turn.`
+                          : copy.chainWaitingTitle}
+                      </strong>
+                      <p>
+                        {chainTurnPlayer
+                          ? locale === "ko"
+                            ? `${chainTurnPlayer.name}님이 ${currentChainMeta?.requiredStartDigit}로 시작하는 ${
+                                currentChainMeta?.requiredKind === "prime"
+                                  ? copy.chainRequirementPrime
+                                  : copy.chainRequirementComposite
+                              } 수를 찾는 중입니다.`
+                            : `${chainTurnPlayer.name} is looking for a ${
+                                currentChainMeta?.requiredKind === "prime"
+                                  ? copy.chainRequirementPrime.toLowerCase()
+                                  : copy.chainRequirementComposite.toLowerCase()
+                              } number that starts with ${currentChainMeta?.requiredStartDigit}.`
+                          : copy.chainWaitingBody}
+                      </p>
+                    </div>
+                  ) : (
+                    <form className={styles.answerPanel} onSubmit={onSubmitAnswer}>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabelLine}>
+                          {copy.answerInputLabel}
+                          {answerLabelHint ? (
+                            <em className={styles.inlineFieldHint}>{answerLabelHint}</em>
+                          ) : null}
+                        </span>
+                        <input
+                          ref={answerInputRef}
+                          data-testid="answer-input"
+                          onChange={(event) => onAnswerDraftChange(event.target.value)}
+                          onPaste={(event) => event.preventDefault()}
+                          placeholder={copy.chainInputPlaceholder}
+                          type="text"
+                          value={answerDraft}
+                        />
+                      </label>
+                      <small>
+                        {locale === "ko"
+                          ? `${roundRemainingSeconds}${copy.secondsUnit} 안에 이어질 수를 입력하지 못하면 탈락합니다.`
+                          : `Answer within ${roundRemainingSeconds}s or you will be eliminated.`}
+                      </small>
+                      <div className={styles.actionRow}>
+                        <button
+                          className={styles.secondaryAction}
+                          data-testid="answer-rules-button"
+                          onClick={openRulesModal}
+                          type="button"
+                        >
+                          {locale === "ko" ? "룰" : "Rules"}
+                        </button>
+                        <button
+                          className={styles.primaryAction}
+                          data-testid="submit-answer-button"
+                          disabled={!answerDraft.trim() || busyState === "submit"}
+                          type="submit"
+                        >
+                          {busyState === "submit" ? copy.checkingAnswer : copy.submitAnswer}
+                        </button>
+                      </div>
+                    </form>
+                  )
                 ) : myRoundStatus?.hasSubmitted ? (
                   <div className={styles.revealPanel} data-state="success" data-testid="success-panel">
                     <span className={styles.challengeLabel}>
@@ -3548,36 +3767,69 @@ function RoomExperience({
           <div className={styles.screenOverlayScrim} />
           <section className={`${styles.screenCard} ${styles.screenCardNarrow}`} data-testid="round-reveal-panel">
             <div className={styles.screenHero}>
-              <span className={styles.challengeLabel}>{copy.answerRevealLabel}</span>
-              <h3>{roundCopy?.prompt}</h3>
+              <span className={styles.challengeLabel}>
+                {isChainMode
+                  ? locale === "ko"
+                    ? "턴 결과"
+                    : "Turn result"
+                  : copy.answerRevealLabel}
+              </span>
+              <h3>{isChainMode ? getNumberChainRevealHeadline(locale, room, chainSuccessfulTurn, chainEliminatedTurn) : roundCopy?.prompt}</h3>
               <p>
                 {locale === "ko"
                   ? `${roundTransitionSeconds}${copy.secondsUnit} 뒤 자동으로 ${
-                      room.completedRounds >= room.settings.roundCount ? "결과 화면" : "다음 라운드"
+                      isChainMode
+                        ? chainAliveCount <= 1
+                          ? "결과 화면"
+                          : "다음 턴"
+                        : room.completedRounds >= room.settings.roundCount
+                          ? "결과 화면"
+                          : "다음 라운드"
                     }로 넘어갑니다.`
                   : `Automatically moving in ${roundTransitionSeconds}s.`}
               </p>
             </div>
 
             <div className={styles.screenAnswerBlock}>
-              <span>{locale === "ko" ? "정답" : "Answer"}</span>
-              <strong>{room.round.revealedAnswer ?? "-"}</strong>
+              <span>
+                {isChainMode
+                  ? locale === "ko"
+                    ? chainSuccessfulTurn
+                      ? "이어진 수"
+                      : "탈락 사유"
+                    : chainSuccessfulTurn
+                      ? "Next number"
+                      : "Elimination"
+                  : locale === "ko"
+                    ? "정답"
+                    : "Answer"}
+              </span>
+              <strong>
+                {isChainMode
+                  ? chainSuccessfulTurn?.answer ??
+                    (chainEliminatedTurn?.lastSubmissionText && chainEliminatedTurn.lastSubmissionText.length > 0
+                      ? chainEliminatedTurn.lastSubmissionText
+                      : locale === "ko"
+                        ? "시간 초과 또는 잘못된 수"
+                        : "Timeout or invalid number")
+                  : room.round.revealedAnswer ?? "-"}
+              </strong>
             </div>
 
             <div className={`${styles.overlayStatRow} ${styles.overlayStatRowCompact}`}>
               <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{locale === "ko" ? "라운드" : "round"}</span>
+                <span>{isChainMode ? copy.turnCountField : locale === "ko" ? "라운드" : "round"}</span>
                 <strong>
-                  {room.round.roundNumber}/{room.settings.roundCount}
+                  {isChainMode ? room.round.roundNumber : `${room.round.roundNumber}/${room.settings.roundCount}`}
                 </strong>
               </div>
               <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{revealSummary.label}</span>
-                <strong>{revealSummary.value}</strong>
+                <span>{isChainMode ? copy.chainAliveLabel : revealSummary.label}</span>
+                <strong>{isChainMode ? `${chainAliveCount}/${room.players.length}` : revealSummary.value}</strong>
               </div>
               <div className={`${styles.statusNode} ${styles.statusNodeInline}`}>
-                <span>{locale === "ko" ? "점수 변동" : "score swing"}</span>
-                <strong>{revealDeltaRange}</strong>
+                <span>{isChainMode ? copy.chainUsedLabel : locale === "ko" ? "점수 변동" : "score swing"}</span>
+                <strong>{isChainMode ? chainUsedCount : revealDeltaRange}</strong>
               </div>
             </div>
 
@@ -3633,9 +3885,11 @@ function RoomExperience({
                 <strong>{winnerNames || sortedPlayers[0]?.name || "-"}</strong>
               </div>
               <div className={styles.statusNode}>
-                <span>{copy.roundCountField}</span>
+                <span>{isChainMode ? copy.turnCountField : copy.roundCountField}</span>
                 <strong>
-                  {room.settings.roundCount} {copy.roundsUnit}
+                  {isChainMode
+                    ? room.completedRounds
+                    : `${room.settings.roundCount} ${copy.roundsUnit}`}
                 </strong>
               </div>
               <div className={styles.statusNode}>
@@ -3733,8 +3987,8 @@ function RoomExperience({
             <div className={styles.settingsColumn}>
               <div className={`${styles.field} ${styles.settingsFullWidth}`}>
                 <span>{copy.gameModeField}</span>
-                <div className={styles.modeChoiceRow} data-columns="2">
-                  {(["factor", "binary"] as const).map((modeValue) => (
+                <div className={styles.modeChoiceRow} data-columns="3">
+                  {(["factor", "binary", "chain"] as const).map((modeValue) => (
                     <button
                       className={styles.modeChoiceButton}
                       data-active={settingsDraft.mode === modeValue}
@@ -3758,29 +4012,45 @@ function RoomExperience({
               </div>
 
               <div className={styles.settingsSplitGrid}>
-                <div className={`${styles.field} ${styles.rangeField}`}>
-                  <div className={styles.fieldHead}>
-                    <span>{copy.roundCountField}</span>
-                    <strong className={styles.rangeValue}>
-                      {settingsDraft.roundCount} {copy.roundsUnit}
-                    </strong>
+                {settingsDraft.mode !== "chain" ? (
+                  <div className={`${styles.field} ${styles.rangeField}`}>
+                    <div className={styles.fieldHead}>
+                      <span>{copy.roundCountField}</span>
+                      <strong className={styles.rangeValue}>
+                        {settingsDraft.roundCount} {copy.roundsUnit}
+                      </strong>
+                    </div>
+                    <input
+                      className={styles.rangeInput}
+                      data-testid="round-count-range"
+                      type="range"
+                      min="3"
+                      max="50"
+                      step="1"
+                      value={settingsDraft.roundCount}
+                      onChange={(event) =>
+                        onSettingsDraftChange((current) => ({
+                          ...current,
+                          roundCount: Number(event.target.value)
+                        }))
+                      }
+                    />
                   </div>
-                  <input
-                    className={styles.rangeInput}
-                    data-testid="round-count-range"
-                    type="range"
-                    min="3"
-                    max="50"
-                    step="1"
-                    value={settingsDraft.roundCount}
-                    onChange={(event) =>
-                      onSettingsDraftChange((current) => ({
-                        ...current,
-                        roundCount: Number(event.target.value)
-                      }))
-                    }
-                  />
-                </div>
+                ) : (
+                  <div className={`${styles.field} ${styles.rangeField}`}>
+                    <div className={styles.fieldHead}>
+                      <span>{copy.turnCountField}</span>
+                      <strong className={styles.rangeValue}>
+                        {locale === "ko" ? "마지막 1명까지" : "Until one survivor"}
+                      </strong>
+                    </div>
+                    <small className={styles.fieldNote}>
+                      {locale === "ko"
+                        ? "턴은 살아남은 플레이어가 한 명만 남을 때까지 계속됩니다."
+                        : "Turns keep rotating until only one player remains alive."}
+                    </small>
+                  </div>
+                )}
 
                 <div className={`${styles.field} ${styles.rangeField}`}>
                   <div className={styles.fieldHead}>
@@ -3804,6 +4074,12 @@ function RoomExperience({
                   />
                   {isGoldenBellSettings ? (
                     <small className={styles.fieldNote}>{copy.goldenBellUntimedHint}</small>
+                  ) : settingsDraft.mode === "chain" ? (
+                    <small className={styles.fieldNote}>
+                      {locale === "ko"
+                        ? "각 플레이어는 제한 시간 안에 이어질 수를 말해야 하며, 실패하면 즉시 탈락합니다."
+                        : "Each player must answer inside the timer. A failed turn means immediate elimination."}
+                    </small>
                   ) : null}
                 </div>
               </div>
@@ -3860,6 +4136,44 @@ function RoomExperience({
                       <small>{copy.binaryPreviewHint}</small>
                     </span>
                   </label>
+                </div>
+              ) : settingsDraft.mode === "chain" ? (
+                <div className={styles.settingsStack}>
+                  <div className={styles.field}>
+                    <div className={styles.fieldHead}>
+                      <span>{locale === "ko" ? "턴 규칙" : "Turn rules"}</span>
+                      <strong className={styles.rangeValue}>
+                        {locale === "ko" ? "소수 / 합성수 랜덤" : "Prime / composite random"}
+                      </strong>
+                    </div>
+                    <small className={styles.fieldNote}>
+                      {locale === "ko"
+                        ? "이전 수의 마지막 자리로 시작하는 수를 제시해야 하며, 소수/합성수 요구는 턴마다 랜덤으로 바뀝니다."
+                        : "Each turn asks for a prime or composite number that starts with the previous last digit."}
+                    </small>
+                  </div>
+                  <div className={styles.settingsOptionGrid}>
+                    <div className={styles.toggleCard} data-active="true">
+                      <span>
+                        <strong>{locale === "ko" ? "재사용 금지" : "No reuse"}</strong>
+                        <small>
+                          {locale === "ko"
+                            ? "이미 나온 수는 다시 사용할 수 없습니다."
+                            : "Any number that already appeared in the chain is permanently blocked."}
+                        </small>
+                      </span>
+                    </div>
+                    <div className={styles.toggleCard} data-active="true">
+                      <span>
+                        <strong>{locale === "ko" ? "즉시 탈락" : "Immediate elimination"}</strong>
+                        <small>
+                          {locale === "ko"
+                            ? `오답 또는 시간 초과 시 ${NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS}점 감점 후 탈락합니다.`
+                            : `Wrong answers or timeouts deduct ${NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS} points and eliminate that player.`}
+                        </small>
+                      </span>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -4185,7 +4499,70 @@ function RoomExperience({
               </button>
             </div>
 
-            {scoreGuidePage === 0 ? (
+            {room.settings.mode === "chain" ? (
+              scoreGuidePage === 0 ? (
+                <div className={styles.scoreGuidePage}>
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>
+                      {locale === "ko" ? "턴 점수" : "Turn score"}
+                    </span>
+                    <BlockMath math={getNumberChainScoreFormulaLatex()} />
+                  </article>
+
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>
+                      {locale === "ko" ? "승리 조건" : "Win condition"}
+                    </span>
+                    <p className={styles.railBody}>
+                      {locale === "ko"
+                        ? "가장 마지막까지 탈락하지 않은 플레이어가 승리합니다. 각 턴은 한 명씩 진행되며, 성공할 때마다 점수를 얻습니다."
+                        : "The last surviving player wins. Turns rotate one player at a time, and every successful extension adds points."}
+                    </p>
+                  </article>
+
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>
+                      {locale === "ko" ? "턴 조건" : "Turn conditions"}
+                    </span>
+                    <p className={styles.railBody}>
+                      {locale === "ko"
+                        ? "이전 수의 마지막 자리로 시작해야 하고, 매 턴 소수 또는 합성수 조건이 랜덤으로 주어집니다."
+                        : "Each answer must start with the previous last digit, and each turn randomly requires either a prime or a composite number."}
+                    </p>
+                  </article>
+                </div>
+              ) : (
+                <div className={styles.scoreGuidePage}>
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>
+                      {locale === "ko" ? "탈락 패널티" : "Elimination penalty"}
+                    </span>
+                    <BlockMath math={`\\operatorname{penalty}_{chain}=-${NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS}`} />
+                  </article>
+
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>
+                      {locale === "ko" ? "추가 제약" : "Extra restrictions"}
+                    </span>
+                    <p className={styles.railBody}>
+                      {locale === "ko"
+                        ? "이미 나온 수는 다시 사용할 수 없고, 1과 0으로 끝나는 수는 정답이 될 수 없습니다."
+                        : "Used numbers cannot be reused, and both 1 and numbers ending in 0 are always invalid."}
+                    </p>
+                  </article>
+
+                  <article className={styles.scoreGuideCard}>
+                    <span className={styles.challengeLabel}>{copy.scoreGuideVariablesHeading}</span>
+                    <div className={styles.scoreGuideVariables}>
+                      <BlockMath math={"\\operatorname{remainingMs}=\\operatorname{endsAt}-\\operatorname{submittedAt}"} />
+                      <BlockMath math={"\\operatorname{turnScore}=\\operatorname{successBase}+\\operatorname{speedBonus}"} />
+                      <BlockMath math={"\\operatorname{lastAlive}=\\text{the final non-eliminated player}"} />
+                      <BlockMath math={"\\operatorname{matchCap}=3600000\\,\\mathrm{ms}"} />
+                    </div>
+                  </article>
+                </div>
+              )
+            ) : scoreGuidePage === 0 ? (
               <div className={styles.scoreGuidePage}>
                 <article className={styles.scoreGuideCard}>
                   <span className={styles.challengeLabel}>{copy.scoreGuideBaseHeading}</span>
@@ -4692,6 +5069,49 @@ function getRailPanelAnchorTop(panelId: RailPanelId, phase: RoomSnapshot["phase"
   return "1.4rem";
 }
 
+function getSortedPlayersForDisplay(room: RoomSnapshot) {
+  if (room.settings.mode !== "chain") {
+    return sortPlayersByScore(room.players);
+  }
+
+  return [...room.players].sort((left, right) => {
+    const leftAlive = !left.isEliminated;
+    const rightAlive = !right.isEliminated;
+
+    if (leftAlive !== rightAlive) {
+      return leftAlive ? -1 : 1;
+    }
+
+    if (leftAlive && rightAlive) {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      if (right.correctAnswers !== left.correctAnswers) {
+        return right.correctAnswers - left.correctAnswers;
+      }
+
+      return left.name.localeCompare(right.name);
+    }
+
+    const leftOrder = left.eliminationOrder ?? 0;
+    const rightOrder = right.eliminationOrder ?? 0;
+    if (rightOrder !== leftOrder) {
+      return rightOrder - leftOrder;
+    }
+
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+
+    if (right.correctAnswers !== left.correctAnswers) {
+      return right.correctAnswers - left.correctAnswers;
+    }
+
+    return left.name.localeCompare(right.name);
+  });
+}
+
 type RuleSummary = {
   primaryLines: string[];
   additionalLines: string[];
@@ -4753,6 +5173,22 @@ function getLegacyRuleSummary(locale: Locale, settings: LobbySettings): RuleSumm
       };
     }
 
+    if (settings.mode === "chain") {
+      return {
+        primaryLines: [
+          `${getModeLabelByLocale(locale, settings.mode)}`,
+          `플레이 시간: 마지막 1명까지 · ${getRoundTimeSummary(locale, settings)}`,
+          "답변 입력 규칙: 이전 수의 끝자리로 시작하는 수를 입력"
+        ],
+        additionalLines: [
+          "매 턴 소수 또는 합성수 조건이 랜덤으로 주어짐",
+          "한 자리 수부터 사용 가능 · 1은 불가",
+          "0으로 끝나는 수와 이미 나온 수는 사용 불가",
+          `오답 또는 시간 초과 시 ${formatSignedScore(-NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS)}점 · 즉시 탈락`
+        ]
+      };
+    }
+
     return {
       primaryLines: [
         `${getModeLabelByLocale(locale, settings.mode)}`,
@@ -4798,6 +5234,22 @@ function getLegacyRuleSummary(locale: Locale, settings: LobbySettings): RuleSumm
     };
   }
 
+  if (settings.mode === "chain") {
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)}`,
+        `Play time: until one survivor remains · ${getRoundTimeSummary(locale, settings)}`,
+        "Answer rule: enter a number that starts with the previous last digit"
+      ],
+      additionalLines: [
+        "Each turn randomly asks for either a prime or a composite number",
+        "Single-digit answers are allowed, but 1 is invalid",
+        "Numbers ending in 0 and reused numbers are banned",
+        `Wrong answers or timeouts apply ${formatSignedScore(-NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS)} and immediate elimination`
+      ]
+    };
+  }
+
   return {
     primaryLines: [
       `${getModeLabelByLocale(locale, settings.mode)}`,
@@ -4840,6 +5292,22 @@ function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
               ? "첫 정답자가 나오면 즉시 공개 단계로 이동"
               : ""
         ].filter(Boolean)
+      };
+    }
+
+    if (settings.mode === "chain") {
+      return {
+        primaryLines: [
+          `${getModeLabelByLocale(locale, settings.mode)}`,
+          `플레이 시간: 마지막 1명까지 · ${getRoundTimeSummary(locale, settings)}`,
+          "답안 입력 규칙: 이전 수의 끝자리로 시작하는 수를 입력"
+        ],
+        additionalLines: [
+          "매 턴 소수 또는 합성수 조건이 랜덤으로 주어짐",
+          "한 자리 수부터 사용 가능 · 1은 불가",
+          "0으로 끝나는 수와 이미 나온 수는 사용 불가",
+          `오답 또는 시간 초과 시 ${formatSignedScore(-NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS)}점 · 즉시 탈락`
+        ]
       };
     }
 
@@ -4889,6 +5357,22 @@ function getRuleSummary(locale: Locale, settings: LobbySettings): RuleSummary {
     };
   }
 
+  if (settings.mode === "chain") {
+    return {
+      primaryLines: [
+        `${getModeLabelByLocale(locale, settings.mode)}`,
+        `Play time: until one survivor remains · ${getRoundTimeSummary(locale, settings)}`,
+        "Answer rule: enter a number that starts with the previous last digit"
+      ],
+      additionalLines: [
+        "Each turn randomly asks for either a prime or a composite number",
+        "Single-digit answers are allowed, but 1 is invalid",
+        "Numbers ending in 0 and reused numbers are banned",
+        `Wrong answers or timeouts apply ${formatSignedScore(-NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS)} and immediate elimination`
+      ]
+    };
+  }
+
   return {
     primaryLines: [
       `${getModeLabelByLocale(locale, settings.mode)}`,
@@ -4927,6 +5411,18 @@ function getRevealSummary(
   room: RoomSnapshot,
   correctPlayers: Array<{ name: string }>
 ) {
+  if (room.settings.mode === "chain" && room.round?.mode === "chain") {
+    const chainMeta = room.round.challengeMeta as NumberChainChallengeMeta;
+    const aliveCount = room.round.playerStatuses.some((status) => status.isEliminated)
+      ? Math.max(0, chainMeta.alivePlayerIds.length - 1)
+      : chainMeta.alivePlayerIds.length;
+
+    return {
+      label: locale === "ko" ? "생존자" : "alive",
+      value: locale === "ko" ? `${aliveCount}명` : `${aliveCount} players`
+    };
+  }
+
   const resolutionMode =
     room.settings.mode === "factor" ? room.settings.factorResolutionMode : "all-play";
 
@@ -4972,7 +5468,27 @@ function getRevealDeltaRange(
     : `${formatSignedScore(maxDelta)} to ${formatSignedScore(minDelta)}`;
 }
 
-function getRevealStatusLabel(locale: Locale, status: PlayerRoundStatus) {
+function getRevealStatusLabel(locale: Locale, mode: GameMode, status: PlayerRoundStatus) {
+  if (mode === "chain") {
+    if (status.hasSubmitted) {
+      return locale === "ko" ? "체인 성공" : "Chain continued";
+    }
+
+    if (status.isEliminated) {
+      return locale === "ko" ? "탈락" : "Eliminated";
+    }
+
+    if (status.lastSubmissionKind === "wrong") {
+      return locale === "ko" ? "체인 실패" : "Failed turn";
+    }
+
+    if (status.isCurrentTurn) {
+      return locale === "ko" ? "현재 차례" : "On turn";
+    }
+
+    return locale === "ko" ? "대기" : "Waiting";
+  }
+
   if (status.hasSubmitted) {
     return locale === "ko" ? "정답 제출 성공" : "Correct answer";
   }
@@ -5024,6 +5540,115 @@ function getFactorAnswerInlineHint(
   return primeAnswerMode === "number"
     ? copy.answerHintFactorPrimeNumber
     : copy.answerHintFactorPrimePhrase;
+}
+
+function getNumberChainInlineHint(
+  locale: Locale,
+  meta: NumberChainChallengeMeta | null
+) {
+  if (!meta) {
+    return locale === "ko"
+      ? "이전 수의 끝자리로 시작하는 수를 입력하세요."
+      : "Answer with a number that starts with the previous last digit.";
+  }
+
+  const kindLabel = meta.requiredKind === "prime"
+    ? getCopy(locale).chainRequirementPrime
+    : getCopy(locale).chainRequirementComposite;
+
+  return locale === "ko"
+    ? `${meta.requiredStartDigit}로 시작하는 ${kindLabel} 수`
+    : `Starts with ${meta.requiredStartDigit} · ${kindLabel.toLowerCase()} number`;
+}
+
+function getNumberChainFailureFeedback(
+  locale: Locale,
+  result: SubmitAnswerResult,
+  meta: NumberChainChallengeMeta | null
+) {
+  const penaltySuffix =
+    locale === "ko"
+      ? `${NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS}점 감점 후 탈락했습니다.`
+      : `You lost ${NUMBER_CHAIN_ELIMINATION_PENALTY_POINTS} points and were eliminated.`;
+  const requiredDigitText =
+    meta?.requiredStartDigit != null
+      ? locale === "ko"
+        ? `${meta.requiredStartDigit}로 시작해야 합니다.`
+        : `The number had to start with ${meta.requiredStartDigit}.`
+      : locale === "ko"
+        ? "시작 숫자 조건을 맞춰야 합니다."
+        : "The starting digit requirement was not met.";
+
+  switch (result.failureCode) {
+    case "wrong-start-digit":
+      return locale === "ko"
+        ? `체인을 잇지 못했습니다. ${requiredDigitText} ${penaltySuffix}`
+        : `The chain broke. ${requiredDigitText} ${penaltySuffix}`;
+    case "used-number":
+      return locale === "ko"
+        ? `이미 나온 수를 다시 사용해서 탈락했습니다. ${penaltySuffix}`
+        : `That number was already used in the chain. ${penaltySuffix}`;
+    case "needs-prime":
+      return locale === "ko"
+        ? `이번 턴은 소수를 요구합니다. ${penaltySuffix}`
+        : `This turn required a prime number. ${penaltySuffix}`;
+    case "needs-composite":
+      return locale === "ko"
+        ? `이번 턴은 합성수를 요구합니다. ${penaltySuffix}`
+        : `This turn required a composite number. ${penaltySuffix}`;
+    case "ends-with-zero":
+      return locale === "ko"
+        ? `0으로 끝나는 수는 사용할 수 없습니다. ${penaltySuffix}`
+        : `Numbers ending in 0 are not allowed. ${penaltySuffix}`;
+    case "one-not-allowed":
+      return locale === "ko"
+        ? `1은 체인에 사용할 수 없습니다. ${penaltySuffix}`
+        : `The number 1 cannot be used in the chain. ${penaltySuffix}`;
+    case "invalid-number":
+    default:
+      return locale === "ko"
+        ? `유효한 수를 제시하지 못해 탈락했습니다. ${penaltySuffix}`
+        : `That was not accepted as a valid chain number. ${penaltySuffix}`;
+  }
+}
+
+function getNumberChainRevealHeadline(
+  locale: Locale,
+  room: RoomSnapshot,
+  successfulTurn: PlayerRoundStatus | null,
+  eliminatedTurn: PlayerRoundStatus | null
+) {
+  const getPlayerName = (playerId: string) =>
+    room.players.find((candidate) => candidate.id === playerId)?.name ??
+    (locale === "ko" ? "플레이어" : "Player");
+
+  if (successfulTurn) {
+    const playerName = getPlayerName(successfulTurn.playerId);
+    const answerText = successfulTurn.answer ?? successfulTurn.lastSubmissionText ?? room.round?.revealedAnswer ?? "-";
+    return locale === "ko"
+      ? `${playerName}님이 ${answerText}로 체인을 이었습니다.`
+      : `${playerName} continued the chain with ${answerText}.`;
+  }
+
+  if (eliminatedTurn) {
+    const playerName = getPlayerName(eliminatedTurn.playerId);
+    if (room.messageKey === "chain-turn-timeout") {
+      return locale === "ko"
+        ? `${playerName}님이 제한 시간 안에 답하지 못해 탈락했습니다.`
+        : `${playerName} timed out and was eliminated.`;
+    }
+
+    const answerText = eliminatedTurn.lastSubmissionText;
+    return answerText
+      ? locale === "ko"
+        ? `${playerName}님이 ${answerText}를 냈다가 체인을 끊어 탈락했습니다.`
+        : `${playerName} broke the chain with ${answerText} and was eliminated.`
+      : locale === "ko"
+        ? `${playerName}님이 체인을 잇지 못해 탈락했습니다.`
+        : `${playerName} failed to continue the chain and was eliminated.`;
+  }
+
+  return locale === "ko" ? "이번 턴이 종료되었습니다." : "This turn has ended.";
 }
 
 function getBinaryPreviewText(
@@ -5085,8 +5710,28 @@ function getBaseConversionPlaceholder(meta?: BinaryChallengeMeta) {
   return "101011 / 2F / 57";
 }
 
-function getRoundBoardStatus(locale: Locale, status?: PlayerRoundStatus | null) {
+function getRoundBoardStatus(locale: Locale, mode: GameMode, status?: PlayerRoundStatus | null) {
   if (!status) {
+    return locale === "ko" ? "대기" : "waiting";
+  }
+
+  if (mode === "chain") {
+    if (status.isEliminated) {
+      return locale === "ko" ? "탈락" : "eliminated";
+    }
+
+    if (status.hasSubmitted) {
+      return locale === "ko" ? "체인 성공" : "continued";
+    }
+
+    if (status.isCurrentTurn) {
+      return locale === "ko" ? "현재 차례" : "on turn";
+    }
+
+    if (status.lastSubmissionKind === "wrong") {
+      return locale === "ko" ? "체인 실패" : "failed";
+    }
+
     return locale === "ko" ? "대기" : "waiting";
   }
 
@@ -5109,8 +5754,28 @@ function getRoundBoardStatus(locale: Locale, status?: PlayerRoundStatus | null) 
   return locale === "ko" ? "대기" : "waiting";
 }
 
-function getLeaderboardState(status?: PlayerRoundStatus | null) {
+function getLeaderboardState(mode: GameMode, status?: PlayerRoundStatus | null) {
   if (!status) {
+    return "waiting";
+  }
+
+  if (mode === "chain") {
+    if (status.isEliminated) {
+      return "eliminated";
+    }
+
+    if (status.isCurrentTurn) {
+      return "answering";
+    }
+
+    if (status.hasSubmitted) {
+      return "correct";
+    }
+
+    if (status.lastSubmissionKind === "wrong") {
+      return "wrong";
+    }
+
     return "waiting";
   }
 
@@ -5261,6 +5926,10 @@ function getBaseScoreFormulaLatex() {
   return `\\operatorname{base}(r)=\\begin{cases}${cases}\\\\${SCORE_FALLBACK_POINTS},&r\\ge ${fallbackRank}\\end{cases}`;
 }
 
+function getNumberChainScoreFormulaLatex() {
+  return `\\operatorname{turnScore}=${NUMBER_CHAIN_SUCCESS_BASE_POINTS}+\\operatorname{round}\\left(\\frac{\\operatorname{remainingMs}}{1000}\\right)\\times ${NUMBER_CHAIN_SPEED_BONUS_PER_SECOND}`;
+}
+
 function getRetryWrongAnswerPenaltyFormulaLatex() {
   const retryPenaltyRate = (RETRY_WRONG_ANSWER_PENALTY_PERCENT / 100).toFixed(2);
 
@@ -5298,6 +5967,12 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko" ? "<새 라운드가 시작되었습니다>" : "<New round started>";
   }
 
+  if (entry.systemKey === "chain-turn-started") {
+    return locale === "ko"
+      ? `<${entry.playerName ?? "플레이어"}님의 턴이 시작되었습니다>`
+      : `<${entry.playerName ?? "A player"} is now on the clock>`;
+  }
+
   if (entry.systemKey === "player-joined") {
     return locale === "ko"
       ? `${entry.playerName ?? "플레이어"}님이 참가했습니다.`
@@ -5314,6 +5989,16 @@ function getSystemChatMessage(entry: RoomSnapshot["chatFeed"][number], locale: L
     return locale === "ko"
       ? `${entry.playerName ?? "플레이어"}님이 오답을 제시했습니다.\n[입력 값 : ${entry.answerText ?? "-"}]`
       : `${entry.playerName ?? "A player"} submitted a wrong answer.\n[Input: ${entry.answerText ?? "-"}]`;
+  }
+
+  if (entry.systemKey === "chain-player-eliminated") {
+    return locale === "ko"
+      ? entry.answerText
+        ? `${entry.playerName ?? "플레이어"}님이 ${entry.answerText}를 내 체인을 끊어 탈락했습니다.`
+        : `${entry.playerName ?? "플레이어"}님이 제한 시간 안에 답하지 못해 탈락했습니다.`
+      : entry.answerText
+        ? `${entry.playerName ?? "A player"} broke the chain with ${entry.answerText} and was eliminated.`
+        : `${entry.playerName ?? "A player"} timed out and was eliminated from the chain.`;
   }
 
   if (entry.systemKey === "spectator-joined") {
@@ -5487,6 +6172,10 @@ function getErrorMessage(error: unknown, locale: Locale) {
       ko: "게임을 시작하려면 최소 1명의 접속 중인 플레이어가 필요합니다.",
       en: "At least one connected player is required to start."
     },
+    "Number chain mode needs at least two connected players to start.": {
+      ko: "숫자 체인 모드는 최소 2명의 접속 중인 플레이어가 있어야 시작할 수 있습니다.",
+      en: "Number chain mode needs at least two connected players to start."
+    },
     "Only the host can move the room forward.": {
       ko: "다음 라운드 진행은 방장만 할 수 있습니다.",
       en: "Only the host can move the room forward."
@@ -5558,6 +6247,14 @@ function getErrorMessage(error: unknown, locale: Locale) {
     "Press the golden bell button before submitting an answer.": {
       ko: "먼저 정답 외치기 버튼으로 답변권을 얻어야 합니다.",
       en: "Press the golden bell button before submitting an answer."
+    },
+    "You were already eliminated from this match.": {
+      ko: "이번 게임에서는 이미 탈락한 상태입니다.",
+      en: "You were already eliminated from this match."
+    },
+    "It is not your turn in number chain mode.": {
+      ko: "지금은 당신의 차례가 아닙니다.",
+      en: "It is not your turn in number chain mode."
     },
     "You are not connected to that room.": {
       ko: "해당 방에 연결되어 있지 않습니다.",

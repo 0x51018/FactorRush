@@ -2,9 +2,11 @@ import {
   type BaseConversionPair,
   FACTOR_PRIME_SHOUT,
   type BinaryChallengeMeta,
+  type ChainNumberKind,
   type ConversionBase,
   type FactorResolutionMode,
   type GameMode,
+  type NumberChainChallengeMeta,
   type PrimeFactorChallengeMeta,
   type RoomMessageKey,
   type RoomPhase,
@@ -63,6 +65,18 @@ const COPY = {
     factorResolutionAllPlayBody: "모든 플레이어가 끝까지 동시에 정답을 입력하는 기본 대결 방식입니다.",
     factorResolutionFirstCorrectBody: "가장 먼저 정답을 맞힌 플레이어가 나오면 즉시 공개 단계로 넘어갑니다.",
     factorResolutionGoldenBellBody: "정답 외치기에 먼저 성공한 플레이어가 답변권을 가져가며, 기본값은 오답 후에도 다시 도전할 수 있습니다.",
+    chainTurnLabel: "현재 차례",
+    chainAliveLabel: "생존자",
+    chainUsedLabel: "사용된 수",
+    chainRequirementPrime: "소수",
+    chainRequirementComposite: "합성수",
+    chainWaitingTitle: "다른 플레이어 차례입니다.",
+    chainWaitingBody: "지금은 입력을 기다리는 중입니다. 이어질 수를 미리 떠올려 보세요.",
+    chainEliminatedTitle: "이번 게임에서 탈락했습니다.",
+    chainEliminatedBody: "채팅과 리더보드는 계속 볼 수 있고, 결과 화면에서 우승자를 확인할 수 있습니다.",
+    chainCurrentLabel: "현재 체인",
+    chainInputPlaceholder: "23",
+    turnCountField: "진행 턴",
     factorSuddenDeathLabel: "서든데스 연장",
     factorSuddenDeathHint: "기본 모드에서 시간 안에 아무도 못 맞추면, 이후 첫 정답자 1명만 점수를 얻습니다.",
     factorPrimeAnswerField: "소수 문제 정답",
@@ -267,6 +281,18 @@ const COPY = {
     factorResolutionAllPlayBody: "Everyone keeps submitting answers until the round naturally ends.",
     factorResolutionFirstCorrectBody: "The first correct answer immediately pushes the room into reveal.",
     factorResolutionGoldenBellBody: "The first player to buzz gets the answer turn, and by default wrong answers can buzz again after the penalty.",
+    chainTurnLabel: "Current turn",
+    chainAliveLabel: "Alive",
+    chainUsedLabel: "Used numbers",
+    chainRequirementPrime: "Prime",
+    chainRequirementComposite: "Composite",
+    chainWaitingTitle: "Another player has the turn.",
+    chainWaitingBody: "Wait for the active player while planning your own next number.",
+    chainEliminatedTitle: "You were eliminated from this match.",
+    chainEliminatedBody: "You can still watch chat and the leaderboard until the winner is decided.",
+    chainCurrentLabel: "Current chain",
+    chainInputPlaceholder: "23",
+    turnCountField: "Turns played",
     factorSuddenDeathLabel: "Sudden death extension",
     factorSuddenDeathHint: "If nobody solves the timed all-play round, the room switches to first-solver sudden death.",
     factorPrimeAnswerField: "Prime target answer",
@@ -443,11 +469,15 @@ export function getModeLabelByLocale(locale: Locale, mode: GameMode) {
     return locale === "ko" ? "Base Conversion 모드" : "Base Conversion Mode";
   }
 
-  if (locale === "ko") {
-    return mode === "factor" ? "Prime Factor 모드" : "Decimal / Binary 모드";
+  if (mode === "chain") {
+    return locale === "ko" ? "숫자 체인 모드" : "Number Chain Mode";
   }
 
-  return mode === "factor" ? "Prime Factor Sprint" : "Decimal / Binary Blitz";
+  if (locale === "ko") {
+    return "Prime Factor 모드";
+  }
+
+  return "Prime Factor Sprint";
 }
 
 export function getModeDescriptionByLocale(locale: Locale, mode: GameMode) {
@@ -457,15 +487,17 @@ export function getModeDescriptionByLocale(locale: Locale, mode: GameMode) {
       : "Convert between base 2, 10, and 16 faster than everyone else.";
   }
 
-  if (locale === "ko") {
-    return mode === "factor"
-      ? "제시된 수를 가장 빠르게 소인수분해하세요."
-      : "10진수와 2진수를 서로 가장 빠르게 변환하세요.";
+  if (mode === "chain") {
+    return locale === "ko"
+      ? "이전 수의 마지막 자리에서 시작하는 소수 또는 합성수를 차례대로 이어 가며 끝까지 살아남으세요."
+      : "Take turns chaining prime or composite numbers from the previous last digit until only one survivor remains.";
   }
 
-  return mode === "factor"
-    ? "Break the target into prime factors faster than everyone else."
-    : "Swap between decimal and binary before the room does.";
+  if (locale === "ko") {
+    return "제시된 수를 가장 빠르게 소인수분해하세요.";
+  }
+
+  return "Break the target into prime factors faster than everyone else.";
 }
 
 export function getBinaryRatioSummary(locale: Locale, chance: number | BaseConversionPair) {
@@ -538,6 +570,21 @@ export function getPhaseHeadlineByLocale(locale: Locale, phase: RoomPhase, round
 }
 
 export function getChallengeCopy(locale: Locale, round: Pick<RoundSnapshot, "mode" | "challengeMeta">) {
+  if (round.mode === "chain") {
+    const meta = round.challengeMeta as NumberChainChallengeMeta;
+    const kindLabel = getChainKindLabel(locale, meta.requiredKind);
+    return {
+      prompt:
+        locale === "ko"
+          ? `${meta.currentNumber}에서 이어서, ${meta.requiredStartDigit}로 시작하는 ${kindLabel} 수를 제시하세요.`
+          : `Continue from ${meta.currentNumber} with a ${kindLabel.toLowerCase()} number that starts with ${meta.requiredStartDigit}.`,
+      helper:
+        locale === "ko"
+          ? "재사용 금지 · 1은 불가 · 0으로 끝나는 수는 불가"
+          : "No reused numbers. 1 is invalid, and numbers ending in 0 are banned."
+    };
+  }
+
   if (round.mode === "factor") {
     const meta = round.challengeMeta as PrimeFactorChallengeMeta;
     return {
@@ -611,6 +658,10 @@ export function getRoomMessageByLocale(
       "settings-updated": "변경된 룰이 적용되었습니다.",
       "settings-updated-reset-ready": "변경된 룰이 적용되었습니다.",
       "round-live": "라운드가 시작되었습니다. 빠르게 맞힐수록 점수를 더 받습니다.",
+      "chain-turn-live": `${actor}님의 차례입니다. 현재 체인을 이어 주세요.`,
+      "chain-turn-correct": `${actor}님이 체인을 성공적으로 이어 갔습니다.`,
+      "chain-turn-eliminated": `${actor}님이 체인을 끊어 탈락했습니다.`,
+      "chain-turn-timeout": `${actor}님이 제한 시간 안에 답하지 못해 탈락했습니다.`,
       "golden-bell-open": "골든벨 모드입니다. 메인 시간 안에 먼저 정답 외치기에 성공한 사람이 10초 답변권을 가집니다.",
       "golden-bell-claimed": `${actor}님이 정답 외치기에 성공했습니다.`,
       "golden-bell-wrong": `${actor}님이 골든벨 기회를 놓쳐 점수가 깎였습니다.`,
@@ -634,6 +685,10 @@ export function getRoomMessageByLocale(
       "settings-updated": "Updated rules applied.",
       "settings-updated-reset-ready": "Updated rules applied.",
       "round-live": "The round is live. Faster correct answers earn more points.",
+      "chain-turn-live": `${actor} is on the clock. Continue the chain.`,
+      "chain-turn-correct": `${actor} extended the chain successfully.`,
+      "chain-turn-eliminated": `${actor} broke the chain and was eliminated.`,
+      "chain-turn-timeout": `${actor} timed out and was eliminated from the chain.`,
       "golden-bell-open": "Golden bell mode is live. The main round timer pauses during each claimed 10-second answer turn.",
       "golden-bell-claimed": `${actor} claimed the answer turn.`,
       "golden-bell-wrong": `${actor} missed the golden bell answer and lost points.`,
@@ -675,6 +730,11 @@ function getBaseLabel(locale: Locale, base: ConversionBase) {
   }
 
   return "decimal";
+}
+
+function getChainKindLabel(locale: Locale, kind: ChainNumberKind) {
+  const copy = getCopy(locale);
+  return kind === "prime" ? copy.chainRequirementPrime : copy.chainRequirementComposite;
 }
 
 function getBaseHelperByLocale(locale: Locale, base: ConversionBase) {
